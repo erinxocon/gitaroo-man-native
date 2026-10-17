@@ -1,0 +1,19 @@
+# Hand-identified functions (name address). Applied to the Ghidra project by tools/ghidra/export.sh.
+# libgraph
+sceGsGetGParam 0x00122638
+# libmpeg (identified by Sony libmpeg source order and body shape)
+sceMpegDemuxPss 0x00129D80
+sceMpegDelete 0x0012A8C8
+sceMpegIsEnd 0x0012AA20
+sceMpegIsRefBuffEmpty 0x0012AA30
+# libpkt (GIF/VIF packet builders; run natively, see native = [...] in gitaroo.toml)
+sceVif1PkInit 0x001240D0
+sceVif1PkReset 0x001240E0
+sceVif1PkTerminate 0x001240F0
+sceVif1PkCnt 0x00124148
+sceVif1PkRef 0x001241C0
+sceVif1PkEnd 0x00124258
+sceVif1PkReserve 0x001242D0
+sceGifPkOpenGifTag 0x001242E8
+# libsif iopheap
+sceSifFreeIopHeap 0x00130F18
