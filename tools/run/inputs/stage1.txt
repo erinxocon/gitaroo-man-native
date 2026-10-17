@@ -1,0 +1,1 @@
+start@900:8,cross@1400:8,cross@1700:8,cross@2000:8,cross@2300:8,start@2500:8,right@2560:8,start@2620:8,start@3000:8,right@3060:8,start@3120:8
