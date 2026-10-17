@@ -1,0 +1,32 @@
+# Game data: everyone supplies their own disc. Never commit any of it.
+*.iso
+*.ISO
+*.bin
+*.elf
+*.p2s
+*.ps2
+*.irx
+/iso/
+/mc0/
+/mc1/
+
+# Everything generated: recompiled code, Ghidra projects/exports, build trees, captures, logs
+/build/
+/logs/
+*.log
+ps2_log.txt
+*.perf
+*.perf.old
+
+# Third-party archives and tools
+ghidra_*.zip
+
+# Local tool/editor state
+.claude/
+.playwright/
+.playwright-cli/
+imgui.ini
+__pycache__/
+*.pyc
+.vscode/
+.idea/

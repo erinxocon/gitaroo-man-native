@@ -1,0 +1,4 @@
+[submodule "external/PS2Recomp"]
+	path = external/PS2Recomp
+	url = https://github.com/erinxocon/PS2Recomp.git
+	branch = gitaroo-native
