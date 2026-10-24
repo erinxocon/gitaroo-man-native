@@ -1,0 +1,60 @@
+{
+  "comment": "Gitaroo Man VU1 lifter input (tools/vu1lift/vu1lift.py). entries = MSCAL start PCs, jr_targets = JR/JALR targets observed by the PS2X_VU1_CENSUS runs, dynamic_branches = pairs the EE rewrites in-stream (FLUSHE; MPG 1) with their possible targets (table 0x249360 + ELF default).",
+  "elf_va": "0x244480",
+  "pairs": 1420,
+  "entries": [
+    "0x0668",
+    "0x0720",
+    "0x0768",
+    "0x0788",
+    "0x07D0",
+    "0x1B68"
+  ],
+  "jr_targets": [
+    "0x0138",
+    "0x0220",
+    "0x0388",
+    "0x0470",
+    "0x04F0",
+    "0x0500",
+    "0x0518",
+    "0x0528",
+    "0x0540",
+    "0x0550",
+    "0x0578",
+    "0x0588",
+    "0x0598",
+    "0x0C08",
+    "0x0C68",
+    "0x0C80",
+    "0x0CD0",
+    "0x1100",
+    "0x1A98",
+    "0x1B00",
+    "0x2450",
+    "0x24A8",
+    "0x24B8",
+    "0x24E0",
+    "0x2510",
+    "0x2538",
+    "0x2548",
+    "0x25E8",
+    "0x2620",
+    "0x2640",
+    "0x26A0",
+    "0x2728",
+    "0x2770",
+    "0x2790",
+    "0x27C0",
+    "0x27E8"
+  ],
+  "dynamic_branches": {
+    "0x1B70": [
+      "0x0000",
+      "0x1B80",
+      "0x2108",
+      "0x1E10",
+      "0x2280"
+    ]
+  }
+}
