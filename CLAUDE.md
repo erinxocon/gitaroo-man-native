@@ -60,6 +60,14 @@ the build; this file is the working rules and the facts that are expensive to re
   output shows single fields and never matches the CPU's woven frames. See docs/gpu-renderer.md.
 - GL work happens on the host (window) thread only; raylib caches GL state, so restore what you change.
 
+## Audio
+
+- The IOP (and the SPU2) only advances while the game thread accounts EE cycles, so anything that
+  blocks the game thread -- or the GS host thread long enough to fill its queue -- is an audio
+  dropout. Keep slow work (PNG encoding, file writes) off both; `PS2X_TRACE_STALLS=1` finds stalls.
+- Output latency matters (rhythm game): `PS2X_TRACE_AUDIO_LATENCY=1` should show ~30-40 ms buffered
+  and no underruns through `stage1_battle.txt`. See docs/audio.md.
+
 ## Facts worth knowing
 
 - Compiler: Metrowerks CodeWarrior for PS2 (C++, MW-mangled names); the Sony SDK parts (0x120000-

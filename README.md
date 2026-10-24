@@ -118,12 +118,15 @@ tools/run/bench.sh tutorial            # frame rate per 2 s window in the tutori
 | `PS2X_ASPECT=W:H` | shape of the displayed picture (default 4:3; with `PS2X_WIDESCREEN=1` also pass `PS2X_ASPECT=16:9` so the window opens wide) |
 | `PS2X_WINDOW=WxH` | initial window size (default 960 lines in the display aspect) |
 | `PS2X_DEINTERLACE=0` | show raw fields instead of the weaver |
+| `PS2X_AUDIO_LATENCY_MS=N` | audio buffered ahead of the sound device (default 40; raise if it crackles) ([docs/audio.md](docs/audio.md)) |
+| `PS2X_AUDIO_PERIOD_MS=N`, `PS2X_AUDIO_RAYLIB=1` | sound device period (default 5 ms); play through raylib's shared device instead |
 | `PS2X_VU1_LIFT=0` | use the VU1 interpreter instead of the recompiled microprogram |
 | `PS2X_VU1_NATIVE=0` | run the mesh renderer (entry 0x1B68) as recompiled microcode instead of native C++ |
 | `PS2X_VU1_VERIFY=1` | run interpreter and recompiled/native VU1 in lockstep and report any difference |
 | `PS2X_VU1_CENSUS=<dir>` | record VU1 programs/entries/jump targets (AC5-format `manifest.json`) |
 | `PS2X_NO_EE_INTERP=1` | disable the fallback EE interpreter for runtime-generated code |
-| `PS2X_TRACE_GS`, `_VIF`, `_VU1`, `_RPC`, `_PAD`, `_SPU2`, `_TRX`, `_PRESENT`, `_DMACHAIN`, `_IOP_IMPORTS`, `_IOPMEM`, `_MPEG_AUDIO` | subsystem traces |
+| `PS2X_TRACE_GS`, `_VIF`, `_VU1`, `_RPC`, `_PAD`, `_SPU2`, `_TRX`, `_PRESENT`, `_DMACHAIN`, `_IOP_IMPORTS`, `_IOPMEM`, `_MPEG_AUDIO`, `_MC` | subsystem traces |
+| `PS2X_TRACE_AUDIO_LATENCY=1`, `PS2X_TRACE_STALLS=1` | audio buffer level and underruns once a second; game-thread stalls (each one is an audio dropout) |
 | `PS2X_DUMP_RAM_TICK`, `PS2X_DUMP_VRAM`, `PS2X_DUMP_TEX`, `PS2X_AUDIO_DUMP`, `PS2X_SPU2_INPUT_DUMP` | state dumps |
 
 ## Repository layout
@@ -151,6 +154,7 @@ Ignored, local-only: `iso/` (your disc), `build/` (all generated output), `logs/
 - [docs/vu1-lifter.md](docs/vu1-lifter.md): VU1 census, comparison with Ace Combat 5, the lifter and its verification
 - [docs/vu1-renderer.md](docs/vu1-renderer.md): what the VU1 mesh renderer computes, and its native C++ replacement
 - [docs/gpu-renderer.md](docs/gpu-renderer.md): the OpenGL GS backend, upscaling and its verification
+- [docs/audio.md](docs/audio.md): the audio path, its latency budget and dropouts
 - [docs/pcsx2-reference.md](docs/pcsx2-reference.md): using PCSX2 as ground truth
 - [docs/research/persona4-decomp.md](docs/research/persona4-decomp.md): lessons from the Persona 4 decompilation (same compiler family)
 
