@@ -61,3 +61,11 @@ Two sessions: the tutorial into the stage 1 battle (10 states), and a full playt
 - VU0 micro mode is never used.
 
 These facts drive the VU1 lifter; see [vu1-lifter.md](vu1-lifter.md).
+
+## Saves
+
+The port's memory card is a directory (`mc0/` next to the ELF, or `PS2X_MC_ROOT`). To carry a PCSX2
+save over: `python3 tools/pcsx2/mcextract.py <Mcd001.ps2>` lists the card,
+`--extract BASLUS-20294USER --to <dir>` copies the Gitaroo save out. A completed-game save loads
+(the game reads its 4320-byte record), but Single Play still starts at the tutorial; how the game
+offers later stages from it is not worked out yet. Saves are personal data and stay out of git.
