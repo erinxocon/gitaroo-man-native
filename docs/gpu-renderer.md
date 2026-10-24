@@ -15,7 +15,7 @@ PS2X_GS_BACKEND=cpu build/runtime/ps2xRuntime/ps2EntryRunner iso/SLUS_202.94  # 
 |---|---|
 | `PS2X_GS_BACKEND=cpu` | use the CPU rasterizer instead |
 | `PS2X_GS_SCALE=N` | internal resolution N x (1-8, default 2) |
-| `PS2X_GS_GPU_VERIFY=1` | run the CPU rasterizer on a copy of GS memory too and compare every presented frame; stats every 5 s, side-by-side PPMs (GPU, CPU, 8x difference) of the first bad frames into `PS2X_DUMP_FRAMES` |
+| `PS2X_GS_GPU_VERIFY=1` | run the CPU rasterizer on a copy of GS memory too and compare every presented frame; stats every 5 s, side-by-side PPMs (GPU, CPU, 8x difference) of the first bad frames into `PS2X_DUMP_FRAMES`. Runs at 1x unless `PS2X_GS_SCALE` is set (upscaled presentation shows single fields, which never match the CPU's woven frames) |
 | `PS2X_GS_GPU_VERIFY_TICK=t` | also dump the comparison for vsync ticks t..t+3 |
 | `PS2X_GS_GPU_PRESENT=0` | present through the CPU path (download + CPU presentation) |
 | `PS2X_GS_GPU_STATS=1` | every 10 s: counts of unsupported features and of target uploads/downloads by reason |
