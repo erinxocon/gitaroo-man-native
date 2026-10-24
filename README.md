@@ -113,6 +113,7 @@ tools/run/bench.sh tutorial            # frame rate per 2 s window in the tutori
 | `PS2X_GS_SCALE=N` | internal resolution of the OpenGL renderer (1-8, default 2) |
 | `PS2X_GS_GPU_VERIFY=1` | run the CPU rasterizer alongside the GPU one and compare every frame |
 | `PS2X_GS_THREADS=N` | CPU rasterizer worker threads (default 6, 0 = inline) |
+| `PS2X_MC_ROOT=<dir>` | memory card directory (default `mc0/` next to the ELF); `tools/pcsx2/mcextract.py` copies saves out of a PCSX2 card |
 | `PS2X_WIDESCREEN=1` | 16:9: the community widescreen patch (wider 3D view, 2D stretched as in PCSX2), applied at run time |
 | `PS2X_ASPECT=W:H` | shape of the displayed picture (default 4:3; with `PS2X_WIDESCREEN=1` also pass `PS2X_ASPECT=16:9` so the window opens wide) |
 | `PS2X_WINDOW=WxH` | initial window size (default 960 lines in the display aspect) |
