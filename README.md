@@ -122,6 +122,8 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 |---|---|
 | `PS2X_SKIP_MOVIES=1` | skip FMVs |
 | `PS2X_INPUT_SCRIPT=...` | scripted pad input (`start@900:8,cross@1400:8`) |
+| `PS2X_INPUT_CLOCK=reads` | time scripted input by the game's pad reads instead of vblanks (keeps pace when the game runs slower than real time) |
+| `PS2X_INPUT_LIVE=<file>` | also read presses appended to `<file>` while running (ticks relative to when the line is read) |
 | `PS2X_DUMP_FRAMES=<dir>`, `PS2X_DUMP_EVERY=N` | write every Nth presented frame as PNG |
 | `PS2X_GS_BACKEND=cpu` | draw the GS with the CPU rasterizer instead of OpenGL ([docs/gpu-renderer.md](docs/gpu-renderer.md)) |
 | `PS2X_GS_SCALE=N` | internal resolution of the OpenGL renderer (1-8, default 2) |
