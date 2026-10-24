@@ -8,8 +8,9 @@ your own disc, and the tools here produce everything else on your machine.
 ## Goals
 
 - **As native as possible.** Like the [Ace Combat 5 static recompilation](https://github.com/sal063/Ace-Combat-5-Static-recompilation),
-  replace emulated hardware with native code wherever we can: the VU1 microprogram is recompiled to
-  C++ and the GS is drawn with OpenGL; native rendering of the game's meshes is the next big step.
+  replace emulated hardware with native code wherever we can: the VU1 mesh renderer is native C++
+  (the rest of the microprogram is recompiled to C++) and the GS is drawn with OpenGL; drawing the
+  game's meshes directly on the GPU is the next big step.
 - **Portable.** The shipped runtime should build and run on any platform a C++20 compiler and the
   runtime's libraries support. Platform-specific code is a last resort; dev/profiling tools may be
   platform-specific.
@@ -21,11 +22,11 @@ your own disc, and the tools here produce everything else on your machine.
 ## Status
 
 Boots through the intro movies (video and audio), title screen and menus into the tutorial and the
-stage 1 battle, playable with keyboard or controller, with music and sound. The VU1 renderer
-microprogram runs as recompiled C++ (verified bit-for-bit against the interpreter over 10M+ runs).
-Graphics are drawn with OpenGL at 2x (or more) internal resolution, verified frame by frame against
-the CPU rasterizer. The tutorial runs at a locked 60 fps; the stage 1 battle at 30-60 fps, now
-limited by the game thread (EE code and VU1). Later stages are not yet tested in the port. See [docs/](docs/) for details.
+stage 1 battle, playable with keyboard or controller, with music and sound. The VU1 mesh renderer
+(transform, lighting, clip test) is native C++, the rest of the microprogram recompiled C++, both
+verified bit-for-bit against the interpreter over 10M+ runs. Graphics are drawn with OpenGL at 2x
+(or more) internal resolution, verified frame by frame against the CPU rasterizer. The tutorial and
+almost all of the stage 1 battle run at a locked 60 fps (the busiest later part at 55-58). Later stages are not yet tested in the port. See [docs/](docs/) for details.
 
 ## How it works
 
@@ -114,7 +115,8 @@ tools/run/bench.sh tutorial            # frame rate per 2 s window in the tutori
 | `PS2X_GS_THREADS=N` | CPU rasterizer worker threads (default 6, 0 = inline) |
 | `PS2X_DEINTERLACE=0` | show raw fields instead of the weaver |
 | `PS2X_VU1_LIFT=0` | use the VU1 interpreter instead of the recompiled microprogram |
-| `PS2X_VU1_VERIFY=1` | run interpreter and recompiled VU1 in lockstep and report any difference |
+| `PS2X_VU1_NATIVE=0` | run the mesh renderer (entry 0x1B68) as recompiled microcode instead of native C++ |
+| `PS2X_VU1_VERIFY=1` | run interpreter and recompiled/native VU1 in lockstep and report any difference |
 | `PS2X_VU1_CENSUS=<dir>` | record VU1 programs/entries/jump targets (AC5-format `manifest.json`) |
 | `PS2X_NO_EE_INTERP=1` | disable the fallback EE interpreter for runtime-generated code |
 | `PS2X_TRACE_GS`, `_VIF`, `_VU1`, `_RPC`, `_PAD`, `_SPU2`, `_TRX`, `_PRESENT`, `_DMACHAIN`, `_IOP_IMPORTS`, `_IOPMEM`, `_MPEG_AUDIO` | subsystem traces |
@@ -143,6 +145,7 @@ Ignored, local-only: `iso/` (your disc), `build/` (all generated output), `logs/
 
 - [docs/architecture.md](docs/architecture.md): the game's engine and code layout
 - [docs/vu1-lifter.md](docs/vu1-lifter.md): VU1 census, comparison with Ace Combat 5, the lifter and its verification
+- [docs/vu1-renderer.md](docs/vu1-renderer.md): what the VU1 mesh renderer computes, and its native C++ replacement
 - [docs/gpu-renderer.md](docs/gpu-renderer.md): the OpenGL GS backend, upscaling and its verification
 - [docs/pcsx2-reference.md](docs/pcsx2-reference.md): using PCSX2 as ground truth
 - [docs/research/persona4-decomp.md](docs/research/persona4-decomp.md): lessons from the Persona 4 decompilation (same compiler family)

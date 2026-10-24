@@ -42,6 +42,10 @@ the build; this file is the working rules and the facts that are expensive to re
 - The game has exactly one VU1 microprogram (ELF 0x244480, 1420 pairs). Pair 0x1B70 is a `B` the EE
   patches in-stream to pick one of four render modes (table 0x249360). 6 MSCAL entries; 1B68 is 99.9%
   of VU1 work. Details: docs/vu1-lifter.md, docs/pcsx2-reference.md.
+- Entry 1B68 runs as native C++ (`ps2_vu1_native.cpp`, docs/vu1-renderer.md) for drawn and culled
+  batches; clipped/extra-pass batches decline and run lifted. It must reproduce memory, packets and
+  registers exactly; verify it like the lifter (`PS2X_VU1_NATIVE_BREAK=1` is its negative test).
+  `python3 tools/vu1lift/vu1dis.py` disassembles the microprogram.
 - `tools/vu1lift/vu1lift.py` generates the recompiled program; the runtime uses it by default when the
   micro image matches. After any change to the lifter or to VU1 semantics, run
   `PS2X_VU1_VERIFY=1` through `stage1_battle.txt` (millions of runs, must report 0 mismatches), and
