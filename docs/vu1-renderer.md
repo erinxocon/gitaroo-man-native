@@ -68,28 +68,34 @@ The output buffer holds the GIF tag then STQ/RGBA/XYZF per vertex (PACKED).
 
 ## Native replacement
 
-`VU1Lifted::runNative` runs whenever the lifted program would start at 0x1B68. It computes the
-batch with VU arithmetic (round toward zero, operands with denormals flushed and Inf clamped, the
+`VU1Lifted::runNative` runs whenever the lifted program would start at 0x1B68 -- every batch (up to
+24 vertices, the most the game sends). It computes the batch with VU arithmetic (round toward zero, operands with denormals flushed and Inf clamped, the
 exact-result rule for results near zero or the range limits, the VU's MAX/MINI/FTOI/CLIP/DIV/
 ERLENG), then either commits everything the microprogram would have written -- the in-place
 vertex data, the colour copies, the output buffer including the pipelined loop's three leftover
 register stores, the GIF tag, the kick, the buffer swap -- and the registers it leaves behind
 (the software-pipelined loop's prologue/epilogue, the loads past the end of the batch, the ERLENG
-it starts on the normal after the batch), or declines without touching anything and the lifted
-program runs. It declines for clipped and extra-pass batches, more than 23 vertices, and buffer
-layouts where its read-then-write order could differ from the program's.
+it starts on the normal after the batch). Drawn and culled batches end there; batches that need
+clipping or an extra pass continue in the lifted program at the microprogram's own branch targets
+(0x2418, 0x2430) with exactly the state it has there. Anything else (other continuations in
+data[29], buffer layouts where computing first and storing afterwards could differ from the
+program's interleaving) is declined untouched and runs in the lifted program from the start; the
+stage 1 battle has none.
 
 Verification: `PS2X_VU1_VERIFY=1` runs the interpreter and the lifted/native path from the same state
-and compares registers, VU1 memory and packets. Stage 1 battle: 13.2M runs, 0 mismatches.
-`PS2X_VU1_NATIVE_BREAK=1` (flip one colour bit per batch) is flagged on 83% of all VU1 runs, the
-share native handles. `PS2X_VU1_NATIVE=0` turns it off.
+and compares registers, VU1 memory and packets. Stage 1 battle: 13.0M runs, 0 mismatches; the
+native counters (printed every 2^20 batches in verify mode) showed 5.6M drawn, 5.9M culled, 253k
+continued to the clipper, 428k to an extra pass, none declined. `PS2X_VU1_NATIVE_BREAK=1` (flip one
+colour bit per batch) is flagged on 87% of all VU1 runs. `PS2X_VU1_NATIVE=0` turns it off.
 
 Speed, stage 1 battle with scripted input (fps per 2 s window, 2x GPU renderer): the heavy section
-(vsync ticks ~5100-7400) went from 30 fps to a locked 60; the busiest later part from 50 to 55-58.
+(vsync ticks ~5100-7400) went from 30 fps to a locked 60, the busiest later part (9200+) from 50 to
+60. The whole battle now holds 60 fps.
 
 ## Next
 
-- The clip path and the extra-pass routines in native code (6.5% of calls).
+- The clipper (0x04C0, Sutherland-Hodgman over the six planes, one packet per triangle) and the
+  extra-pass routines (0x0C08, 0x1100, 0x1A98) in native code: about 15% of the remaining VU1 work.
 - GPU meshes: the native loop has the float screen positions before FTOI4; passing them to the GPU
   GS backend alongside the packet (as AC5's `pkt_put_xyzf` does) removes the 1/16-pixel vertex
   snapping at high internal resolutions, and is the hook for drawing these batches as real meshes.
