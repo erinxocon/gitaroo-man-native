@@ -56,7 +56,8 @@ the build; this file is the working rules and the facts that are expensive to re
 
 - The OpenGL GS backend is the default (`PS2X_GS_BACKEND=cpu` = CPU rasterizer). After changing it,
   run `PS2X_GS_GPU_VERIFY=1` through `stage1_battle.txt` (compares every presented frame with the CPU
-  rasterizer; must report 0 bad frames). See docs/gpu-renderer.md.
+  rasterizer; must report 0 bad frames). Verify runs at 1x unless PS2X_GS_SCALE is given: upscaled
+  output shows single fields and never matches the CPU's woven frames. See docs/gpu-renderer.md.
 - GL work happens on the host (window) thread only; raylib caches GL state, so restore what you change.
 
 ## Facts worth knowing
