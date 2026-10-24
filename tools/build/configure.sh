@@ -4,14 +4,24 @@
 #   build/runtime  the runtime + ps2EntryRunner, compiled together with build/recomp (the recompiled
 #                  game, produced by tools/build/recomp.sh) and src/ (our game-specific code)
 # Extra arguments are passed to both cmake configure calls (e.g. -DPS2X_PROFILE_DEBUGINFO=ON).
+# PS2Recomp needs SSE4.1 on x86. The default builds for this machine (-march=native); for binaries
+# that run on other x86-64 CPUs use PS2X_ARCH_FLAGS=-march=x86-64-v2.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 SRC="$ROOT/external/PS2Recomp"
 test -f "$SRC/CMakeLists.txt" || { echo "external/PS2Recomp is empty: git submodule update --init" >&2; exit 1; }
+ARCH_FLAGS=""
+case "$(uname -m)" in
+    x86_64 | amd64) ARCH_FLAGS="${PS2X_ARCH_FLAGS:--march=native}" ;;
+    *) ARCH_FLAGS="${PS2X_ARCH_FLAGS:-}" ;;
+esac
+set -- -DCMAKE_C_FLAGS="$ARCH_FLAGS" -DCMAKE_CXX_FLAGS="$ARCH_FLAGS" "$@"
 cmake -S "$SRC" -B "$ROOT/build/tools" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=OFF "$@"
+    -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_ANALYZER=ON -DPS2X_BUILD_RUNTIME=OFF \
+    -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF "$@"
 cmake --build "$ROOT/build/tools"
 mkdir -p "$ROOT/build/recomp"
 cmake -S "$SRC" -B "$ROOT/build/runtime" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS2X_BUILD_RUNTIME=ON -DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF \
+    -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF \
     -DPS2X_GAME_SOURCE_DIR="$ROOT/src" -DPS2X_GENERATED_DIR="$ROOT/build/recomp" "$@"
