@@ -35,6 +35,9 @@ the build; this file is the working rules and the facts that are expensive to re
 - Test runs: `tools/run/run.sh <name> <secs> VAR=...` (log in `logs/`, frames in `build/runs/<name>/`).
   Use scripted input (`tools/run/inputs/*.txt`, e.g. `stage1_battle.txt` reaches the stage 1 battle
   and the loss screen in ~900 s with movies skipped). Look at the dumped frames to check rendering.
+- Later stages: `tools/run/stage.sh <N> <name> <secs>` with `PS2X_MC_ROOT` pointing at a card
+  directory holding a completed save (the user's PCSX2 save; never commit it). Menus can be driven
+  live with `PS2X_INPUT_LIVE=<file>` plus `PS2X_DUMP_FRAMES`.
 - Speed: `tools/run/bench.sh <name>` prints fps per 2 s window; `perf record -p $(pgrep -x ps2EntryRunner)`.
 
 ## VU1
