@@ -66,5 +66,8 @@ half a line. The host loop draws the result into the 4:3 window. Frame dumps com
 
 - Native 3D (the AC5 `rn_vp` route): replace the VU1 1B68 program with native code that builds GPU
   meshes from the data the game uploads, checked against the lifted microprogram's output.
-- Widescreen: the community 16:9 patch (FOV at 0x26FC70 and HUD fixes) applied as recompiler
-  patches, rendered into a wider target.
+- Widescreen: `PS2X_WIDESCREEN=1` applies the community 16:9 patch at run time (FOV scale at
+  0x26FC70 written before `AirNgp_LoadIdentity` reads it; the 2D projection width 640 -> 480 by
+  wrapping the renderer method 0x1CF810) and presents 16:9. The picture is anamorphic, as on a PS2:
+  the game still renders 640 wide, so the GPU scale factor is what gives it detail. A true wide
+  render target (and a correctly proportioned, centred 2D layer) is still to do.
