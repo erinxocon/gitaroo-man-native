@@ -48,6 +48,13 @@ the build; this file is the working rules and the facts that are expensive to re
   `--exact-flags` once if flag handling changed. `--break-move` proves the verifier still catches errors.
 - VU sources build with `-ffp-contract=off`: the VU has no FMA. Do not reintroduce contraction.
 
+## GS
+
+- The OpenGL GS backend is the default (`PS2X_GS_BACKEND=cpu` = CPU rasterizer). After changing it,
+  run `PS2X_GS_GPU_VERIFY=1` through `stage1_battle.txt` (compares every presented frame with the CPU
+  rasterizer; must report 0 bad frames). See docs/gpu-renderer.md.
+- GL work happens on the host (window) thread only; raylib caches GL state, so restore what you change.
+
 ## Facts worth knowing
 
 - Compiler: Metrowerks CodeWarrior for PS2 (C++, MW-mangled names); the Sony SDK parts (0x120000-

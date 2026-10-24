@@ -8,8 +8,8 @@ your own disc, and the tools here produce everything else on your machine.
 ## Goals
 
 - **As native as possible.** Like the [Ace Combat 5 static recompilation](https://github.com/sal063/Ace-Combat-5-Static-recompilation),
-  replace emulated hardware with native code wherever we can: the VU1 microprogram is already
-  recompiled to C++, and native (GPU) rendering of the game's meshes is the next big step.
+  replace emulated hardware with native code wherever we can: the VU1 microprogram is recompiled to
+  C++ and the GS is drawn with OpenGL; native rendering of the game's meshes is the next big step.
 - **Portable.** The shipped runtime should build and run on any platform a C++20 compiler and the
   runtime's libraries support. Platform-specific code is a last resort; dev/profiling tools may be
   platform-specific.
@@ -23,8 +23,9 @@ your own disc, and the tools here produce everything else on your machine.
 Boots through the intro movies (video and audio), title screen and menus into the tutorial and the
 stage 1 battle, playable with keyboard or controller, with music and sound. The VU1 renderer
 microprogram runs as recompiled C++ (verified bit-for-bit against the interpreter over 10M+ runs).
-The tutorial runs at a locked 60 fps; the stage 1 battle at 30-60 fps, limited by the software GS
-rasterizer. Later stages are not yet tested in the port. See [docs/](docs/) for details.
+Graphics are drawn with OpenGL at 2x (or more) internal resolution, verified frame by frame against
+the CPU rasterizer. The tutorial runs at a locked 60 fps; the stage 1 battle at 30-60 fps, now
+limited by the game thread (EE code and VU1). Later stages are not yet tested in the port. See [docs/](docs/) for details.
 
 ## How it works
 
@@ -107,7 +108,10 @@ tools/run/bench.sh tutorial            # frame rate per 2 s window in the tutori
 | `PS2X_SKIP_MOVIES=1` | skip FMVs |
 | `PS2X_INPUT_SCRIPT=...` | scripted pad input (`start@900:8,cross@1400:8`) |
 | `PS2X_DUMP_FRAMES=<dir>`, `PS2X_DUMP_EVERY=N` | write every Nth presented frame as PNG |
-| `PS2X_GS_THREADS=N` | GS rasterizer worker threads (default 6, 0 = inline) |
+| `PS2X_GS_BACKEND=cpu` | draw the GS with the CPU rasterizer instead of OpenGL ([docs/gpu-renderer.md](docs/gpu-renderer.md)) |
+| `PS2X_GS_SCALE=N` | internal resolution of the OpenGL renderer (1-8, default 2) |
+| `PS2X_GS_GPU_VERIFY=1` | run the CPU rasterizer alongside the GPU one and compare every frame |
+| `PS2X_GS_THREADS=N` | CPU rasterizer worker threads (default 6, 0 = inline) |
 | `PS2X_DEINTERLACE=0` | show raw fields instead of the weaver |
 | `PS2X_VU1_LIFT=0` | use the VU1 interpreter instead of the recompiled microprogram |
 | `PS2X_VU1_VERIFY=1` | run interpreter and recompiled VU1 in lockstep and report any difference |
@@ -139,6 +143,7 @@ Ignored, local-only: `iso/` (your disc), `build/` (all generated output), `logs/
 
 - [docs/architecture.md](docs/architecture.md): the game's engine and code layout
 - [docs/vu1-lifter.md](docs/vu1-lifter.md): VU1 census, comparison with Ace Combat 5, the lifter and its verification
+- [docs/gpu-renderer.md](docs/gpu-renderer.md): the OpenGL GS backend, upscaling and its verification
 - [docs/pcsx2-reference.md](docs/pcsx2-reference.md): using PCSX2 as ground truth
 - [docs/research/persona4-decomp.md](docs/research/persona4-decomp.md): lessons from the Persona 4 decompilation (same compiler family)
 

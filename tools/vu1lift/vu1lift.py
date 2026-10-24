@@ -341,6 +341,16 @@ class Lifter:
         w("int VU1Lifted::runProgram(VU1Interpreter &vu, LiftedRun &run, uint32_t startPc)")
         w("{")
         w("    BranchBackup bk{};")
+        w("    // VF/VI/ACC live in locals (memory stores cannot alias them); written back on every exit")
+        w("    // and spilled before the interpreter functions that read them.")
+        w("    alignas(16) float lvf[32][4];")
+        w("    int32_t lvi[16];")
+        w("    alignas(16) float lacc[4];")
+        w("    std::memcpy(lvf, vu.m_state.vf, sizeof(lvf));")
+        w("    std::memcpy(lvi, vu.m_state.vi, sizeof(lvi));")
+        w("    std::memcpy(lacc, vu.m_state.acc, sizeof(lacc));")
+        w("    auto spillVf = [&]() { std::memcpy(vu.m_state.vf, lvf, sizeof(lvf)); std::memcpy(vu.m_state.acc, lacc, sizeof(lacc)); };")
+        w("    auto writeBack = [&]() { spillVf(); std::memcpy(vu.m_state.vi, lvi, sizeof(lvi)); };")
         w("    uint8_t *const mem = run.mem;")
         w("    const uint32_t dm = run.dataMask;")
         w("    (void)mem;")
@@ -359,14 +369,14 @@ class Lifter:
     def go(self, target, indent="    "):
         if target in self.blocks:
             return "%sgoto B_%04X;" % (indent, target)
-        return "%sreturn handoff(vu, bk, 0x%04Xu);" % (indent, target)
+        return "%s{ writeBack(); return handoff(vu, bk, 0x%04Xu); }" % (indent, target)
 
     def emit_block(self, start, w):
         pairs, succ, kind = self.blocks[start]
         w("")
         w("B_%04X:" % start)
         w("    if (vu.m_cycle >= run.budgetEnd)")
-        w("        return yield(vu, bk, 0x%04Xu);" % start)
+        w("    { writeBack(); return yield(vu, bk, 0x%04Xu); }" % start)
         if kind in ("fall", "off"):
             for pc in pairs:
                 self.emit_pair(pc, w)
@@ -377,6 +387,7 @@ class Lifter:
             for pc in pairs:
                 self.emit_pair(pc, w)
             w("    vu.m_state.pc = 0x%04Xu;" % ((pairs[-1] + 8) & PC_MASK))
+            w("    writeBack();")
             w("    return kLiftEnd;")
             return
         # branch / jump: pairs[-2] is the branch, pairs[-1] its delay slot
@@ -396,6 +407,7 @@ class Lifter:
                 w("        case 0x%04Xu:" % t)
                 w(self.go(t, "            "))
             w("        default:")
+            w("            writeBack();")
             w("            return handoff(vu, bk, dyn);")
             w("        }")
         elif p.is_jump:
@@ -404,6 +416,7 @@ class Lifter:
             for b in sorted(self.blocks):
                 w("        case 0x%04Xu: goto B_%04X;" % (b, b))
             w("        default:")
+            w("            writeBack();")
             w("            return handoff(vu, bk, jt);")
             w("        }")
         elif p.op in (0x20, 0x21):
@@ -417,14 +430,17 @@ class Lifter:
     def emit_upper(self, p):
         op = p.upper_op()
         uw, dest = p.uw, (p.uw >> 21) & 0xF
+        f = uw & 0x3F
+        if op is None and (f & 0x3C) == 0x3C and ((uw & 3) | ((uw >> 4) & 0x7C)) == 0x1F:  # CLIP
+            return ["opClip(vu, VF(%d), VF(%d)[3]);" % ((uw >> 11) & 0x1F, (uw >> 16) & 0x1F)]
         if op is None or not dest:
-            return ["vu.execUpper(0x%08Xu);" % uw] if op is None else []
+            return ["spillVf(); vu.execUpper(0x%08Xu);" % uw] if op is None else []
         kind, operand, to_acc = op
         fd, fs, ft = (uw >> 6) & 0x1F, (uw >> 11) & 0x1F, (uw >> 16) & 0x1F
         lanes = [c for c in range(4) if dest & (8 >> c)]
         out = ["{ float r[4];"]
         a = lambda c: "nrm(VF(%d)[%d])" % (fs, c)
-        acc = lambda c: "nrm(vu.m_state.acc[%d])" % c
+        acc = lambda c: "nrm(lacc[%d])" % c
         if operand.startswith("bc"):
             out.append("  const float b = nrm(VF(%d)[%s]);" % (ft, operand[2]))
             b = lambda c: "b"
@@ -468,10 +484,10 @@ class Lifter:
                 for c in lanes:
                     out.append("  VF(%d)[%d] = r[%d];" % (dst, c, c))
         else:
-            dst = "vu.m_state.acc" if to_acc else "VF(%d)" % fd
+            dst = "lacc" if to_acc else "VF(%d)" % fd
             if not to_acc and fd == 0:
                 raise SystemExit("FMAC op writes VF0 at %04X" % p.pc)
-            out.append("  fmacStore<0x%X, %s>(vu, 0x%08Xu, r, %s);"
+            out.append("  fmacStore<0x%X, %s>(vu, 0x%08Xu, r, %s, lvf, lacc);"
                        % (dest, "true" if p.pc in self.mac_live else "false", uw, dst))
         out.append("}")
         return out
@@ -626,8 +642,18 @@ class Lifter:
             vi_write(it, "vu.m_state.%s & 0x3FFu" % ("top" if p.special == 0x68 else "itop"), False)
         elif p.special == 0x6C:  # XGKICK
             LO("xgkick(vu, static_cast<uint16_t>(VI(%d)));" % is_)
-        elif p.special in (0x38, 0x39, 0x3A) or p.special in EFU_SPECIALS:
-            LO("vu.execLower(0x%08Xu, mem, run.dataSize, *run.gs, run.memory, 0x%08Xu);" % (lo, p.up))
+        elif p.special == 0x38:  # DIV
+            LO("opDiv(vu, VF(%d)[%d], VF(%d)[%d]);" % (fs, (lo >> 21) & 3, ft, (lo >> 23) & 3))
+        elif p.special == 0x39:  # SQRT
+            LO("opSqrt(vu, VF(%d)[%d]);" % (ft, (lo >> 23) & 3))
+        elif p.special == 0x3A:  # RSQRT
+            LO("opRsqrt(vu, VF(%d)[%d], VF(%d)[%d]);" % (fs, (lo >> 21) & 3, ft, (lo >> 23) & 3))
+        elif p.special == 0x73:  # ERLENG
+            LO("opErleng(vu, VF(%d));" % fs)
+        elif p.special == 0x78:  # ESQRT
+            LO("opEsqrt(vu, VF(%d)[%d]);" % (fs, (lo >> 21) & 3))
+        elif p.special in EFU_SPECIALS:
+            LO("spillVf(); vu.execLower(0x%08Xu, mem, run.dataSize, *run.gs, run.memory, 0x%08Xu);" % (lo, p.up))
         else:
             raise SystemExit("lifter: unhandled lower op %08X at %04X" % (lo, pc))
 
@@ -636,12 +662,12 @@ class Lifter:
             if pc in self.dynamic:
                 L("const uint32_t dyn = dynamicBranchTarget(run, 0x%04Xu);" % pc)
             elif p.is_jump:
-                L("const uint32_t jt = (static_cast<uint32_t>(static_cast<uint16_t>(bv(vu, bk, %d))) * 8u) & 0x3FFFu;" % is_)
+                L("const uint32_t jt = (static_cast<uint32_t>(static_cast<uint16_t>(bv(lvi, vu, bk, %d))) * 8u) & 0x3FFFu;" % is_)
             elif p.op not in (0x20, 0x21):
-                cond = {0x28: "bv(vu, bk, %d) == bv(vu, bk, %d)" % (is_, it),
-                        0x29: "bv(vu, bk, %d) != bv(vu, bk, %d)" % (is_, it),
-                        0x2C: "bv(vu, bk, %d) < 0" % is_, 0x2D: "bv(vu, bk, %d) > 0" % is_,
-                        0x2E: "bv(vu, bk, %d) <= 0" % is_, 0x2F: "bv(vu, bk, %d) >= 0" % is_}[p.op]
+                cond = {0x28: "bv(lvi, vu, bk, %d) == bv(lvi, vu, bk, %d)" % (is_, it),
+                        0x29: "bv(lvi, vu, bk, %d) != bv(lvi, vu, bk, %d)" % (is_, it),
+                        0x2C: "bv(lvi, vu, bk, %d) < 0" % is_, 0x2D: "bv(lvi, vu, bk, %d) > 0" % is_,
+                        0x2E: "bv(lvi, vu, bk, %d) <= 0" % is_, 0x2F: "bv(lvi, vu, bk, %d) >= 0" % is_}[p.op]
                 L("const bool taken = %s;" % cond)
 
         # Upper, then lower; the interpreter's same-register rule: when the lower op touches the VF
