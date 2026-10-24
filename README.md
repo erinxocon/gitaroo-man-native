@@ -102,12 +102,28 @@ tools/run/run.sh stage1 900 PS2X_SKIP_MOVIES=1 PS2X_INPUT_SCRIPT="$(cat tools/ru
 tools/run/bench.sh tutorial            # frame rate per 2 s window in the tutorial
 ```
 
+To test a later stage, load a save with the stages unlocked (a completed game's save, copied out
+of a PCSX2 memory card with `tools/pcsx2/mcextract.py`) through Options > Load and pick the stage on
+the Single Play map. `tools/run/stage.sh` scripts that: it loads bank 1 of the card in
+`PS2X_MC_ROOT`, starts stage N and lets the battle play out with no input (it is lost, which still
+covers the stage's models, effects and the "Try again?" screen):
+
+```sh
+PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
+```
+
+`PS2X_INPUT_LIVE=<file>` makes the game also read presses appended to `<file>` while it runs
+(`echo "down@0:6,cross@30:6" >> file`, ticks relative to when the line is read); with
+`PS2X_DUMP_FRAMES` that is enough to step through menus from another program.
+
 ### Useful environment variables
 
 | variable | effect |
 |---|---|
 | `PS2X_SKIP_MOVIES=1` | skip FMVs |
 | `PS2X_INPUT_SCRIPT=...` | scripted pad input (`start@900:8,cross@1400:8`) |
+| `PS2X_INPUT_CLOCK=reads` | time scripted input by the game's pad reads instead of vblanks (keeps pace when the game runs slower than real time) |
+| `PS2X_INPUT_LIVE=<file>` | also read presses appended to `<file>` while running (ticks relative to when the line is read) |
 | `PS2X_DUMP_FRAMES=<dir>`, `PS2X_DUMP_EVERY=N` | write every Nth presented frame as PNG |
 | `PS2X_GS_BACKEND=cpu` | draw the GS with the CPU rasterizer instead of OpenGL ([docs/gpu-renderer.md](docs/gpu-renderer.md)) |
 | `PS2X_GS_SCALE=N` | internal resolution of the OpenGL renderer (1-8, default 2) |

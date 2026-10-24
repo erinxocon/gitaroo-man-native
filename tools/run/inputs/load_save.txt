@@ -1,0 +1,1 @@
+start@1600:8,down@2400:6,down@2420:6,down@2440:6,down@2460:6,cross@2560:6,right@2900:10,right@3200:10,cross@3400:8,cross@3800:8,cross@4300:8,cross@4800:8,triangle@5200:8,cross@6100:8
