@@ -73,6 +73,9 @@ python3 tools/vu1lift/vu1lift.py                         # optional: recompiled 
 tools/build/recomp.sh                                    # recompile the game and build the runner
 ```
 
+On x86-64 the build targets your own CPU (`-march=native`); for binaries that run on other
+machines use `PS2X_ARCH_FLAGS=-march=x86-64-v2 tools/build/configure.sh`.
+
 `recomp.sh` writes the recompiled game to `build/recomp/` and builds
 `build/runtime/ps2xRuntime/ps2EntryRunner`. Rerun it after changing `config/` or the runtime; run
 `vu1lift.py` again (then `ninja -C build/runtime`) after changing the lifter. Without the lifted
@@ -147,3 +150,9 @@ project is not affiliated with or endorsed by them.
 
 Our own code and documentation are MIT licensed ([LICENSE](LICENSE)). The PS2Recomp submodule is
 GPL-3.0, so binaries built from this repository are covered by the GPL-3.0.
+
+## Acknowledgements
+
+This project was built with the help of [Claude Code](https://claude.com/claude-code), which was
+used and consulted throughout: reverse engineering, runtime fixes, the VU1 lifter and its
+verification, tooling and documentation.
