@@ -26,7 +26,7 @@ stage 1 battle, playable with keyboard or controller, with music and sound. The 
 (transform, lighting, clip test) is native C++, the rest of the microprogram recompiled C++, both
 verified bit-for-bit against the interpreter over 10M+ runs. Graphics are drawn with OpenGL at 2x
 (or more) internal resolution, verified frame by frame against the CPU rasterizer. The tutorial and
-almost all of the stage 1 battle run at a locked 60 fps (the busiest later part at 55-58). Later stages are not yet tested in the port. See [docs/](docs/) for details.
+the whole stage 1 battle run at a locked 60 fps. Optional 16:9 widescreen. Later stages are not yet tested in the port. See [docs/](docs/) for details.
 
 ## How it works
 
