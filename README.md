@@ -26,7 +26,11 @@ stage 1 battle, playable with keyboard or controller, with music and sound. The 
 (transform, lighting, clip test) is native C++, the rest of the microprogram recompiled C++, both
 verified bit-for-bit against the interpreter over 10M+ runs. Graphics are drawn with OpenGL at 2x
 (or more) internal resolution, verified frame by frame against the CPU rasterizer. The tutorial and
-the whole stage 1 battle run at a locked 60 fps. Optional 16:9 widescreen. Later stages are not yet tested in the port. See [docs/](docs/) for details.
+the whole stage 1 battle run at a locked 60 fps. Optional 16:9 widescreen. Stages 2-10 start from a
+completed memory card save (`tools/run/stage.sh`) and run with both verifiers on: VU1 bit-exact on
+all of them (70-110M runs each), GPU frames matching the CPU rasterizer except a few effects listed
+in [docs/gpu-renderer.md](docs/gpu-renderer.md). Audio reaches the speakers about 50 ms after the
+game produces it ([docs/audio.md](docs/audio.md)). See [docs/](docs/) for details.
 
 ## How it works
 
@@ -128,6 +132,7 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 | `PS2X_GS_BACKEND=cpu` | draw the GS with the CPU rasterizer instead of OpenGL ([docs/gpu-renderer.md](docs/gpu-renderer.md)) |
 | `PS2X_GS_SCALE=N` | internal resolution of the OpenGL renderer (1-8, default 2) |
 | `PS2X_GS_GPU_VERIFY=1` | run the CPU rasterizer alongside the GPU one and compare every frame |
+| `PS2X_GS_GPU_PRIMLOG=N` / `bad` | with the above and `PS2X_DUMP_FRAMES`: log every draw of frame N (or of the first bad frame) to `primlog.txt` |
 | `PS2X_GS_THREADS=N` | CPU rasterizer worker threads (default 6, 0 = inline) |
 | `PS2X_MC_ROOT=<dir>` | memory card directory (default `mc0/` next to the ELF); `tools/pcsx2/mcextract.py` copies saves out of a PCSX2 card |
 | `PS2X_WIDESCREEN=1` | 16:9: the community widescreen patch (wider 3D view, 2D stretched as in PCSX2), applied at run time |
