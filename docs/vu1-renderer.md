@@ -88,6 +88,11 @@ native counters (printed every 2^20 batches in verify mode) showed 5.6M drawn, 5
 continued to the clipper, 428k to an extra pass, none declined. `PS2X_VU1_NATIVE_BREAK=1` (flip one
 colour bit per batch) is flagged on 87% of all VU1 runs. `PS2X_VU1_NATIVE=0` turns it off.
 
+Later stages (started from a completed save with `tools/run/stage.sh`, about 15 minutes each with
+scripted input that never presses a note): 0 mismatches on all of them -- stage 2 105M runs, 3 77M,
+4 12M, 5 86M, 6 85M, 7 103M, 8 112M, 9 87M, 10 84M. None declined a batch to the lifted program
+from the start.
+
 Speed, stage 1 battle with scripted input (fps per 2 s window, 2x GPU renderer): the heavy section
 (vsync ticks ~5100-7400) went from 30 fps to a locked 60, the busiest later part (9200+) from 50 to
 60. The whole battle now holds 60 fps.
