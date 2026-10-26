@@ -273,9 +273,6 @@ stubs = [
   "sceMcRename@0x001374C8",
   "sceMcUnformat@0x001375C8",
   "sceMcGetEntSpace@0x00137658",
-  "__ieee754_rem_pio2f@0x00139B68",
-  "__kernel_cosf@0x0013B010",
-  "__kernel_sinf@0x0013BAB8",
   "calloc_r@0x0013DB70",
   "exit@0x0013F080",
   "fflush@0x0013F130",
@@ -292,9 +289,7 @@ stubs = [
   "memset@0x001413A0",
   "printf_r@0x00142548",
   "printf@0x00142588",
-  "rand@0x001425E8",
   "realloc_r@0x001426A8",
-  "sprintf@0x001430B0",
   "strcasecmp@0x00143290",
   "strcat@0x00143348",
   "strcmp@0x00143478",
@@ -302,7 +297,6 @@ stubs = [
   "strlen@0x001436D8",
   "strncat@0x00143868",
   "strncpy@0x00143A18",
-  "vsprintf@0x00147428",
   "__divdi3@0x001475F0",
 ]
 untracked_stubs = [
@@ -337,6 +331,15 @@ native = [
   "cos",
   "fabs",
   "floor",
+  # Pure guest code with approximate or wrong handlers: rand returned the host's 15-bit rand
+  # (the game's newlib LCG gives 31 bits), the trig helpers used host cosf/sinf and a float
+  # range reduction, and the printf family reads EE varargs with the wrong slot size.
+  "__ieee754_rem_pio2f",
+  "__kernel_cosf",
+  "__kernel_sinf",
+  "rand",
+  "sprintf",
+  "vsprintf",
   "sceGifPkCloseGifTag",
   "sceGifPkAddGsAD",
   "sceGifPkOpenGifTag",
