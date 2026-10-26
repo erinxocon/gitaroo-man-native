@@ -80,5 +80,10 @@ the build; this file is the working rules and the facts that are expensive to re
 - Movies: gmMovie (ezmpeg-derived) over an HLE MPEG decoder; audio goes through the game's PCM callback.
 - IOP modules run under the IOP emulator: SIO2MAN MTAPMAN MCMAN MCSERV PADMAN LIBSD SDRDRV MSTREAM.
   MSTREAM timing depends on IOP vblank handlers.
+- The game's libm is the double-precision build (soft doubles in a0/v0, MW helpers fptodp/dptofp):
+  runtime handlers with libm names assume floats in f12/f0, so `ceil cos fabs floor` are forced
+  `native`. Check the ABI before stubbing any other math function. Sony SDK functions take
+  arguments 5-8 in t0-t3, never on the stack.
+- EE float->int (CVT.W.S) truncates; newlib's sinf/cosf quadrant reduction depends on it.
 - PCSX2 (`tools/pcsx2/`) is the reference for "how it should look"; its GameDB sets eeRoundMode=NegInf
   and patches 0x102DB0.
