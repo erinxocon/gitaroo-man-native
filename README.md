@@ -148,6 +148,7 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 | `PS2X_NO_EE_INTERP=1` | disable the fallback EE interpreter for runtime-generated code |
 | `PS2X_TRACE_GS`, `_VIF`, `_VU1`, `_RPC`, `_PAD`, `_SPU2`, `_TRX`, `_PRESENT`, `_DMACHAIN`, `_IOP_IMPORTS`, `_IOPMEM`, `_MPEG_AUDIO`, `_MC` | subsystem traces |
 | `PS2X_TRACE_AUDIO_LATENCY=1`, `PS2X_TRACE_STALLS=1` | audio buffer level and underruns once a second; game-thread stalls (each one is an audio dropout) |
+| `PS2X_TRACE_STUB_CHECKS=1`, `PS2X_NO_TIMESLICE=1`, `PS2X_IRQ_CHAIN_STOP=1` | report suspect stub cases (overlapping memcpy, failed allocations, dropped wakeups, IRQ handlers returning 0); A/B switches for EE kernel scheduling semantics (both break movies today) |
 | `PS2X_DUMP_RAM_TICK`, `PS2X_DUMP_VRAM`, `PS2X_DUMP_TEX`, `PS2X_AUDIO_DUMP`, `PS2X_SPU2_INPUT_DUMP` | state dumps |
 
 ## Repository layout
