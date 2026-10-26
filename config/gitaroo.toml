@@ -276,10 +276,6 @@ stubs = [
   "__ieee754_rem_pio2f@0x00139B68",
   "__kernel_cosf@0x0013B010",
   "__kernel_sinf@0x0013BAB8",
-  "ceil@0x0013BE58",
-  "cos@0x0013C060",
-  "fabs@0x0013C168",
-  "floor@0x0013C1A0",
   "calloc_r@0x0013DB70",
   "exit@0x0013F080",
   "fflush@0x0013F130",
@@ -334,6 +330,13 @@ skip = []
 # Library functions whose names match runtime handlers but must run as original code
 # (the HLE versions use different packet-builder conventions than the game).
 native = [
+  # libm here is the double-precision build (soft-float doubles in a0/v0); the runtime's handlers
+  # of the same names take and return single floats in f12/f0, so callers got garbage (fabs never
+  # cleared the sign: trace-line hit accuracy above 1, "Error in HitAccuracy").
+  "ceil",
+  "cos",
+  "fabs",
+  "floor",
   "sceGifPkCloseGifTag",
   "sceGifPkAddGsAD",
   "sceGifPkOpenGifTag",
