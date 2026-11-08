@@ -55,12 +55,13 @@ half a line. The host loop draws the result into the 4:3 window. Frame dumps com
   0.12/255 per channel and no frame with more than 0.25% of pixels off by more than 16 (Gitaroo uses
   only CT32 frames, Z32, T4/T8/CT32 textures and five blend modes there).
 - Stages 2-10 (`tools/run/stage.sh`, about 15 minutes each, the verify shadow runs on the threaded
-  CPU rasterizer so the game keeps its speed): stages 5-10 have no bad frame. Known differences:
-  - Stage 2: 2 frames of the fading "Now Loading" text (edge sampling precision).
-  - Stage 3: the water and the intro close-up blend with alpha above 128 (factor above 1.0), which
-    GL clamps. Those draws now run in two passes, Cs*f - Cd*(f-1) for the part above 1, which took
-    the stage from 2375 bad frames to about 300-400. The rest are pixels where Cs*f passes 255 and
-    the GS saturates before subtracting; matching that needs the shader to read the framebuffer.
+  CPU rasterizer so the game keeps its speed): no bad frame on stages 1-3 and 5-10 (2026-11-08).
+  - Stage 3: the water and the intro close-up blend with alpha above 128 (factor above 1.0). GL
+    clamps the shader output before blending, so `(Cs - Cd) * f + Cd` with f > 1 cannot be done by
+    the blender (a two-pass split, Cs*f - Cd*(f-1), still saturated wherever Cs*f passed 255: 300-400
+    bad frames). Such primitives are now drawn one at a time with blending off: the pixels they
+    cover are copied from the target and the shader computes `((A - B) * C >> 7) + D` and COLCLAMP
+    exactly as the GS (`PS2X_GS_GPU_EXACT_BLEND=0` keeps the split). Stage 3: 0 bad frames.
   - Stage 4: the tracer rays are triangles with vertices behind the camera, sent with S, T and Q
     clamped to +-FLT_MAX. GL overflowed interpolating them; scaling a triangle's S/T/Q by a power of
     two (exact for S/Q, T/Q) brought the stage 4 battle from 1227 to 899 bad frames. The rest are
