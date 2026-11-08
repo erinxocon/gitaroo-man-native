@@ -95,8 +95,95 @@ namespace
         }
     }
 
+    // PS2X_RENDER_CENSUS=1 (research aid for a native renderer): count every call to the AIR.NGP
+    // render context's methods (vtable 0x2624F0, 106 entries from +8) with their callers, and log a
+    // summary every 600 frames (SwapBuffers calls). tools/analysis/render_census.py names them.
+    namespace rendercensus
+    {
+        constexpr uint32_t kVtable = 0x002624F0u;
+        constexpr uint32_t kSlots = 108u;
+        constexpr uint32_t kSwapBuffers = 0x001C3340u;
+
+        struct Method
+        {
+            uint32_t address = 0;
+            uint32_t offset = 0;
+            PS2Runtime::RecompiledFunction original = nullptr;
+            uint64_t calls = 0;
+            std::unordered_map<uint32_t, uint64_t> callers;
+        };
+        Method g_methods[kSlots];
+        uint32_t g_count = 0;
+        uint64_t g_frames = 0;
+
+        void report()
+        {
+            std::fprintf(stderr, "[render-census] after %llu frames:\n", static_cast<unsigned long long>(g_frames));
+            for (uint32_t k = 0; k < g_count; ++k)
+            {
+                const Method &m = g_methods[k];
+                if (m.calls == 0)
+                    continue;
+                std::vector<std::pair<uint64_t, uint32_t>> top;
+                for (const auto &[ra, n] : m.callers)
+                    top.push_back({n, ra});
+                std::sort(top.rbegin(), top.rend());
+                std::fprintf(stderr, "[render-census] +0x%03x 0x%06x calls=%llu per-frame=%.1f callers=%zu top:", m.offset,
+                             m.address, static_cast<unsigned long long>(m.calls),
+                             g_frames ? static_cast<double>(m.calls) / g_frames : 0.0, m.callers.size());
+                for (size_t i = 0; i < top.size() && i < 4u; ++i)
+                    std::fprintf(stderr, " %x(%llu)", top[i].second, static_cast<unsigned long long>(top[i].first));
+                std::fprintf(stderr, "\n");
+            }
+        }
+
+        template <uint32_t K>
+        void wrapper(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            Method &m = g_methods[K];
+            ++m.calls;
+            ++m.callers[GPR_U32(ctx, 31)];
+            if (m.address == kSwapBuffers && (++g_frames % 600u) == 0u)
+                report();
+            m.original(rdram, ctx, runtime);
+        }
+
+        template <uint32_t... K>
+        constexpr std::array<PS2Runtime::RecompiledFunction, sizeof...(K)> makeWrappers(std::integer_sequence<uint32_t, K...>)
+        {
+            return {&wrapper<K>...};
+        }
+
+        void install(PS2Runtime &runtime)
+        {
+            static const auto wrappers = makeWrappers(std::make_integer_sequence<uint32_t, kSlots>{});
+            const uint8_t *rdram = runtime.memory().getRDRAM();
+            for (uint32_t slot = 0; slot < kSlots; ++slot)
+            {
+                uint32_t address = 0;
+                std::memcpy(&address, rdram + kVtable + 8u + slot * 4u, sizeof(address));
+                if (address == 0 || !runtime.hasFunction(address))
+                    continue;
+                bool seen = false;
+                for (uint32_t k = 0; k < g_count; ++k)
+                    seen |= g_methods[k].address == address;
+                if (seen)
+                    continue;
+                Method &m = g_methods[g_count];
+                m.address = address;
+                m.offset = 8u + slot * 4u;
+                m.original = runtime.lookupFunction(address);
+                runtime.replaceFunction(address, wrappers[g_count]);
+                ++g_count;
+            }
+            std::fprintf(stderr, "[render-census] wrapping %u render context methods\n", g_count);
+        }
+    }
+
     void applyGitarooOverrides(PS2Runtime &runtime)
     {
+        if (std::getenv("PS2X_RENDER_CENSUS") != nullptr)
+            rendercensus::install(runtime);
         if (const char *ws = std::getenv("PS2X_WIDESCREEN"); ws && std::strcmp(ws, "0") != 0)
         {
             const char *hud = std::getenv("PS2X_WIDESCREEN_HUD");

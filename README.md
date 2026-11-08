@@ -147,6 +147,7 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 | `PS2X_VU1_LIFT=0` | use the VU1 interpreter instead of the recompiled microprogram |
 | `PS2X_VU1_NATIVE=0` | run the mesh renderer (entry 0x1B68) as recompiled microcode instead of native C++ |
 | `PS2X_VU1_VERIFY=1` | run interpreter and recompiled/native VU1 in lockstep and report any difference |
+| `PS2X_RENDER_CENSUS=1` | count AIR.NGP render-context calls (`tools/analysis/render_census.py` names them; [docs/native-render.md](docs/native-render.md)) |
 | `PS2X_IOP_LIFT=0`, `PS2X_IOP_LIFT_VERIFY=1`, `PS2X_IOP_LIFT_STATS=1` | interpret the IOP sound drivers; check every compiled block against the interpreter; report coverage ([docs/iop-lifter.md](docs/iop-lifter.md)) |
 | `PS2X_VU1_CENSUS=<dir>` | record VU1 programs/entries/jump targets (AC5-format `manifest.json`) |
 | `PS2X_NO_EE_INTERP=1` | disable the fallback EE interpreter for runtime-generated code |
