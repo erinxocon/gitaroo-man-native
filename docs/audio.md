@@ -30,6 +30,22 @@ and exports (the `MA_NO_*` options in `ps2_audio.cpp` must match raylib's `raudi
 change `ma_device`'s layout). `PS2X_AUDIO_PERIOD_MS` sets the period; `PS2X_AUDIO_RAYLIB=1` uses a
 raylib stream on raylib's device instead.
 
+## Song clock
+
+The battle, tutorial and VS modes judge presses and place notes by MSTREAM's played-sample
+counter: `FUN_0023de50` (and the battle's `FUN_0014c570`, which tail-calls it) sends RPC 0x5600
+to the IOP driver and gets the number of 48 kHz samples the current stream has played
+(`PS2X_TRACE_MSTREAM=1` logs every MSTREAM call). On a PS2 that is what the TV is playing. Here
+it runs ahead of the speaker by the host output delay (buffered audio plus the device buffer):
+51 ms on average through the stage 1 battle, steady to about 1 ms from second to second, with a
+~10 ms sawtooth inside each second and spikes after stalls. The clock itself is steady (within
++-8.5 ms of the wall clock 98% of the time).
+
+So the clock the game sees is moved back by the measured delay, smoothed over about a second
+(`src/gitaroo_overrides.cpp`). `PS2X_SONG_OFFSET_MS=<ms>` uses a fixed delay instead (0 = the
+original clock), `PS2X_SONG_OFFSET_ADJUST_MS` adds to the measured one (display, wireless
+headphones), and `PS2X_TRACE_SONG_CLOCK=1` logs the delay once a second.
+
 ## Dropouts
 
 Anything that blocks the game thread for longer than the ring holds is a dropout, because the IOP

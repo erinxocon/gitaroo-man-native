@@ -7,6 +7,7 @@
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -95,8 +96,85 @@ namespace
         }
     }
 
+    // MSTREAM song clock: FUN_0023de50 asks the IOP sound driver (RPC 0x5600) for the number of
+    // 48 kHz samples the current stream has played, and the battle, tutorial and VS modes judge
+    // presses and place notes by it. On a PS2 that is what comes out of the TV; here the samples
+    // still sit in the host audio buffers for outputDelayMs(), so every press was judged that much
+    // late. The clock the game sees is moved back by that delay (smoothed over ~1 s so the
+    // buffer's per-frame sawtooth does not become clock jitter). PS2X_SONG_OFFSET_MS=<ms> uses a
+    // fixed delay instead (0 = original clock); PS2X_SONG_OFFSET_ADJUST_MS adds to the measured
+    // delay (e.g. display or Bluetooth latency). PS2X_TRACE_SONG_CLOCK=1 logs it once a second.
+    // FUN_0014c570 (the battle's clock read) tail-jumps into FUN_0023de50, which the recompiler
+    // emits as a direct call, so it is wrapped as well.
+    namespace songclock
+    {
+        PS2Runtime::RecompiledFunction g_orig = nullptr;
+        PS2Runtime::RecompiledFunction g_origBattle = nullptr;
+        bool g_fixed = false;
+        double g_fixedMs = 0.0;
+        double g_adjustMs = 0.0;
+        double g_smoothedMs = -1.0;
+
+        void adjust(R5900Context *ctx, PS2Runtime *runtime)
+        {
+            const int32_t raw = static_cast<int32_t>(GPR_U32(ctx, 2));
+            const double delayMs = runtime->audioBackend().outputDelayMs();
+            g_smoothedMs = g_smoothedMs < 0.0 ? delayMs : g_smoothedMs + (delayMs - g_smoothedMs) * 0.02;
+            const double offsetMs = g_fixed ? g_fixedMs : g_smoothedMs + g_adjustMs;
+            int32_t clock = raw - static_cast<int32_t>(offsetMs * 48.0 + 0.5);
+            if (clock < 0)
+                clock = 0;
+            SET_GPR_S32(ctx, 2, clock);
+
+            static const bool s_trace = std::getenv("PS2X_TRACE_SONG_CLOCK") != nullptr;
+            if (s_trace)
+            {
+                static uint32_t s_n = 0;
+                static double s_min = 1e9, s_max = 0.0, s_sum = 0.0;
+                s_min = std::min(s_min, delayMs);
+                s_max = std::max(s_max, delayMs);
+                s_sum += delayMs;
+                if (++s_n == 60u)
+                {
+                    std::fprintf(stderr, "[song-clock] raw=%d game=%d offset=%.1f ms | output delay min=%.1f avg=%.1f max=%.1f ms\n",
+                                 raw, clock, offsetMs, s_min, s_sum / s_n, s_max);
+                    s_n = 0;
+                    s_min = 1e9;
+                    s_max = 0.0;
+                    s_sum = 0.0;
+                }
+            }
+        }
+
+        void read(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_orig(rdram, ctx, runtime);
+            adjust(ctx, runtime);
+        }
+
+        void readBattle(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+        {
+            g_origBattle(rdram, ctx, runtime);
+            adjust(ctx, runtime);
+        }
+    }
+
     void applyGitarooOverrides(PS2Runtime &runtime)
     {
+        {
+            const char *fixed = std::getenv("PS2X_SONG_OFFSET_MS");
+            const char *adjust = std::getenv("PS2X_SONG_OFFSET_ADJUST_MS");
+            songclock::g_fixed = fixed && *fixed;
+            songclock::g_fixedMs = songclock::g_fixed ? std::strtod(fixed, nullptr) : 0.0;
+            songclock::g_adjustMs = adjust ? std::strtod(adjust, nullptr) : 0.0;
+            if (!(songclock::g_fixed && songclock::g_fixedMs == 0.0))
+            {
+                songclock::g_orig = runtime.lookupFunction(0x0023DE50u);
+                runtime.replaceFunction(0x0023DE50u, &songclock::read);
+                songclock::g_origBattle = runtime.lookupFunction(0x0014C570u);
+                runtime.replaceFunction(0x0014C570u, &songclock::readBattle);
+            }
+        }
         if (const char *ws = std::getenv("PS2X_WIDESCREEN"); ws && std::strcmp(ws, "0") != 0)
         {
             const char *hud = std::getenv("PS2X_WIDESCREEN_HUD");
