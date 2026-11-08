@@ -24,7 +24,8 @@ your own disc, and the tools here produce everything else on your machine.
 Boots through the intro movies (video and audio), title screen and menus into the tutorial and the
 stage 1 battle, playable with keyboard or controller, with music and sound. The VU1 mesh renderer
 (transform, lighting, clip test) is native C++, the rest of the microprogram recompiled C++, both
-verified bit-for-bit against the interpreter over 10M+ runs. Graphics are drawn with OpenGL at 2x
+verified bit-for-bit against the interpreter over 10M+ runs. The IOP sound drivers run as C++
+compiled from their MIPS code, verified block by block against the IOP interpreter. Graphics are drawn with OpenGL at 2x
 (or more) internal resolution, verified frame by frame against the CPU rasterizer. The tutorial and
 the whole stage 1 battle run at a locked 60 fps. Optional 16:9 widescreen. Stages 2-10 start from a
 completed memory card save (`tools/run/stage.sh`) and run with both verifiers on: VU1 bit-exact on
@@ -52,6 +53,7 @@ your disc ──► iso/SLUS_202.94 ──► Ghidra (function list) ──► p
 - **`ps2_recomp`** turns every function into C++ (`config/gitaroo.toml`).
 - **`tools/vu1lift`** compiles the game's single VU1 microprogram to C++ (Ace Combat 5's
   `vurecomp` approach, adapted using a runtime census and PCSX2 captures).
+- **`tools/ioplift`** compiles the IOP sound drivers (MSTREAM, SDRDRV, LIBSD) from MIPS to C++.
 
 ## Requirements
 
@@ -76,6 +78,7 @@ tools/build/configure.sh                                 # builds the recompiler
 tools/ghidra/import.sh                                   # one-time Ghidra project + analysis (slow)
 tools/ghidra/export.sh                                   # apply config/symbols, export build/functions.csv
 python3 tools/vu1lift/vu1lift.py                         # optional: recompiled VU1 microprogram
+python3 tools/ioplift/ioplift.py                         # optional: IOP sound drivers as C++
 tools/build/recomp.sh                                    # recompile the game and build the runner
 ```
 
@@ -84,8 +87,8 @@ machines use `PS2X_ARCH_FLAGS=-march=x86-64-v2 tools/build/configure.sh`.
 
 `recomp.sh` writes the recompiled game to `build/recomp/` and builds
 `build/runtime/ps2xRuntime/ps2EntryRunner`. Rerun it after changing `config/` or the runtime; run
-`vu1lift.py` again (then `ninja -C build/runtime`) after changing the lifter. Without the lifted
-microprogram the runtime simply uses the VU1 interpreter.
+`vu1lift.py` or `ioplift.py` again (then `ninja -C build/runtime`) after changing a lifter. Without
+their output the runtime simply interprets the VU1 microprogram and the IOP modules.
 
 ## Running
 
@@ -144,6 +147,7 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 | `PS2X_VU1_LIFT=0` | use the VU1 interpreter instead of the recompiled microprogram |
 | `PS2X_VU1_NATIVE=0` | run the mesh renderer (entry 0x1B68) as recompiled microcode instead of native C++ |
 | `PS2X_VU1_VERIFY=1` | run interpreter and recompiled/native VU1 in lockstep and report any difference |
+| `PS2X_IOP_LIFT=0`, `PS2X_IOP_LIFT_VERIFY=1`, `PS2X_IOP_LIFT_STATS=1` | interpret the IOP sound drivers; check every compiled block against the interpreter; report coverage ([docs/iop-lifter.md](docs/iop-lifter.md)) |
 | `PS2X_VU1_CENSUS=<dir>` | record VU1 programs/entries/jump targets (AC5-format `manifest.json`) |
 | `PS2X_NO_EE_INTERP=1` | disable the fallback EE interpreter for runtime-generated code |
 | `PS2X_TRACE_GS`, `_VIF`, `_VU1`, `_RPC`, `_PAD`, `_SPU2`, `_TRX`, `_PRESENT`, `_DMACHAIN`, `_IOP_IMPORTS`, `_IOPMEM`, `_MPEG_AUDIO`, `_MC` | subsystem traces |
@@ -164,6 +168,7 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 | `tools/ghidra/` | Ghidra project import, symbol application and function export |
 | `tools/run/` | run/benchmark/profile scripts and scripted input |
 | `tools/vu1lift/` | VU1 microprogram lifter and census comparison |
+| `tools/ioplift/` | IOP module (MIPS I) lifter for the sound drivers |
 | `tools/pcsx2/` | PCSX2 launcher, PINE client and capture analysis |
 | `tools/analysis/` | one-off analysis helpers (IRX disassembler, GS replay, audio comparison, ...) |
 | `docs/` | architecture notes, VU1 lifter, PCSX2 reference workflow, research |

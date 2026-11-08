@@ -55,6 +55,13 @@ the build; this file is the working rules and the facts that are expensive to re
   `--exact-flags` once if flag handling changed. `--break-move` proves the verifier still catches errors.
 - VU sources build with `-ffp-contract=off`: the VU has no FMA. Do not reintroduce contraction.
 
+## IOP
+
+- The sound drivers (LIBSD, SDRDRV, MSTREAM) run as C++ from `tools/ioplift/ioplift.py`
+  (docs/iop-lifter.md); everything they import is HLE in ps2xIOP. After changing the lifter or the
+  IOP interpreter's semantics, run `PS2X_IOP_LIFT_VERIFY=1` through `stage1_battle.txt` (must report
+  0 mismatches) and once with `ioplift.py --break` (must report mismatches).
+
 ## GS
 
 - The OpenGL GS backend is the default (`PS2X_GS_BACKEND=cpu` = CPU rasterizer). After changing it,
