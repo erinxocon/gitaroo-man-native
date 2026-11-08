@@ -136,6 +136,9 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 | `PS2X_GS_SCALE=N` | internal resolution of the OpenGL renderer (1-8, default 2) |
 | `PS2X_GS_GPU_VERIFY=1` | run the CPU rasterizer alongside the GPU one and compare every frame |
 | `PS2X_GS_GPU_PRIMLOG=N` / `bad` | with the above and `PS2X_DUMP_FRAMES`: log every draw of frame N (or of the first bad frame) to `primlog.txt` |
+| `PS2X_VU1_GPU=1` | transform and light the VU1 batches in the OpenGL vertex shader instead of drawing their packets (opt-in; [docs/native-render.md](docs/native-render.md)) |
+| `PS2X_VU1_GPU_VERIFY=1` | with the above: check every such vertex against the packet the VU code produced |
+| `PS2X_VU1_GPU_SUBPIXEL=1` | with `PS2X_VU1_GPU=1`: draw those vertices without the GS's 1/16-pixel snapping (for `PS2X_GS_SCALE` above 1) |
 | `PS2X_GS_THREADS=N` | CPU rasterizer worker threads (default 6, 0 = inline) |
 | `PS2X_MC_ROOT=<dir>` | memory card directory (default `mc0/` next to the ELF); `tools/pcsx2/mcextract.py` copies saves out of a PCSX2 card |
 | `PS2X_WIDESCREEN=1` | 16:9: the community widescreen patch (wider 3D view, 2D stretched as in PCSX2), applied at run time |
