@@ -19,7 +19,7 @@ def entries(data):
     out = []
     for i in range(count):
         e = data[4 + 32 * i:4 + 32 * (i + 1)]
-        name = e[:8].split(b"\0")[0].decode("ascii", "replace")
+        name = e[:9].split(b"\0")[0].decode("ascii", "replace")  # 8-character names end at byte 8
         words = struct.unpack_from("<6I", e, 8)
         out.append((name, words))
     return out
@@ -78,10 +78,12 @@ def main():
         off = ents[i][1][2]
         ch, rate, inter, _ = header(data, off)
         body = data[off + 16:stream_end(data, ents, i)]
+        # Channels alternate in chunks of `interleave` 16-byte blocks (MSTREAM's SPU buffer size).
+        chunk = inter * 16
         chans = [bytearray() for _ in range(ch)]
-        for c0 in range(0, len(body) - inter * ch + 1, inter * ch):
+        for c0 in range(0, len(body) - chunk * ch + 1, chunk * ch):
             for c in range(ch):
-                chans[c] += body[c0 + c * inter:c0 + (c + 1) * inter]
+                chans[c] += body[c0 + c * chunk:c0 + (c + 1) * chunk]
         pcm = [decode_channel(bytes(c)) for c in chans]
         n = min(len(p) for p in pcm)
         with wave.open(outp, "wb") as w:

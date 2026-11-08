@@ -14,8 +14,9 @@ recompiled, or lifted. Judge work by whether it removes such a layer; say so pla
 only improves one. The emulated paths remain as the reference that native replacements are
 checked against (see "Prove replacements").
 
-What is still emulation, in the order it is being replaced: sound (IOP emulator, lifted SDRDRV/
-MSTREAM/LIBSD, the SPU2 model) -> a native audio engine serving the game's sound RPCs; CD, memory
+What is still emulation, in the order it is being replaced: sound -- done, a native engine
+serves the game's sound RPCs (`ps2_native_sound.cpp`, docs/native-audio.md; `PS2X_NATIVE_AUDIO=0`
+is the emulated reference: IOP emulator, lifted SDRDRV/MSTREAM/LIBSD, SPU2 model); CD, memory
 card and pad modules -> host services, after which the IOP emulator goes; VU1 microprogram and the
 GS -> rendering at the AIR.NGP render-context level; the EE scheduler's cycle accounting and the
 interpreter for runtime-generated draw loops.
@@ -74,7 +75,8 @@ interpreter for runtime-generated draw loops.
 
 ## IOP
 
-- The sound drivers (LIBSD, SDRDRV, MSTREAM) run as C++ from `tools/ioplift/ioplift.py`
+- Sound is native by default (see Audio). With `PS2X_NATIVE_AUDIO=0` the sound drivers (LIBSD,
+  SDRDRV, MSTREAM) run as C++ from `tools/ioplift/ioplift.py`
   (docs/iop-lifter.md); everything they import is HLE in ps2xIOP. After changing the lifter or the
   IOP interpreter's semantics, run `PS2X_IOP_LIFT_VERIFY=1` through `stage1_battle.txt` (must report
   0 mismatches) and once with `ioplift.py --break` (must report mismatches).
@@ -89,7 +91,14 @@ interpreter for runtime-generated draw loops.
 
 ## Audio
 
-- The IOP (and the SPU2) only advances while the game thread accounts EE cycles, so anything that
+- Native sound (`ps2_native_sound.cpp`, docs/native-audio.md) answers MSTREAM (SID 0x1563) and
+  SDRDRV (0x80000701) and is mixed by the audio device's callback. After changing it, run
+  `stage1_battle.txt` with `PS2X_NATIVE_AUDIO_CLOCK=ee PS2X_TRACE_MSTREAM=1 PS2X_AUDIO_DUMP=...`
+  and the same with `PS2X_NATIVE_AUDIO=0`, then `tools/audio/mstream_diff.py` (requests and
+  replies identical apart from clock words; status changes in the same order, clock within a
+  frame) and `tools/audio/wav_compare.py` (windows bit-exact once aligned; the runs drift, so
+  search a wide lag). Boot with movies the same way for SDRDRV's PCM ring.
+- With `PS2X_NATIVE_AUDIO=0`: the IOP (and the SPU2) only advances while the game thread accounts EE cycles, so anything that
   blocks the game thread -- or the GS host thread long enough to fill its queue -- is an audio
   dropout. Keep slow work (PNG encoding, file writes) off both; `PS2X_TRACE_STALLS=1` finds stalls.
 - Output latency matters (rhythm game): `PS2X_TRACE_AUDIO_LATENCY=1` should show ~30-40 ms buffered
@@ -102,8 +111,8 @@ interpreter for runtime-generated draw loops.
 - The game assembles MIPS draw loops at runtime (AiCube vertex-array templates 0x1DA330..0x1DA550);
   the runtime's fallback EE interpreter runs them (`PS2X_NO_EE_INTERP=1` disables).
 - Movies: gmMovie (ezmpeg-derived) over an HLE MPEG decoder; audio goes through the game's PCM callback.
-- IOP modules run under the IOP emulator: SIO2MAN MTAPMAN MCMAN MCSERV PADMAN LIBSD SDRDRV MSTREAM.
-  MSTREAM timing depends on IOP vblank handlers.
+- IOP modules run under the IOP emulator: SIO2MAN MTAPMAN MCMAN MCSERV PADMAN (LIBSD SDRDRV
+  MSTREAM only with `PS2X_NATIVE_AUDIO=0`).
 - The game's libm is the double-precision build (soft doubles in a0/v0, MW helpers fptodp/dptofp):
   runtime handlers with libm names assume floats in f12/f0, so `ceil cos fabs floor` are forced
   `native`. Check the ABI before stubbing any other math function. Sony SDK functions take

@@ -75,42 +75,103 @@ MSTREAM commands seen (stage 1 from boot, scripted input; counts in "Census" bel
 `PROJECTS/STDATA/US/*/SONGDATA/STnn.IMC` (one per stage, 18-271 MB), `SOUND/*.IMC` (menus),
 `TITLE/TITLE.IMC`:
 
-- u32 entry count, then 32-byte entries: name (8 bytes, upper-cased by MSTREAM), two words, the
-  stream's byte offset (+0x10), a word, an unused word (MSTREAM keeps the file handle there), and
-  a kind (+0x1C): 0 for streams, 2 for sounds loaded whole (effects, jingles).
-- At each stream's offset, a 16-byte header: channels (1-8), sample rate (48000, 44100, 22050),
-  interleave in bytes (below 0x300: 3 SPU buffers, else 2) and the length in units of 16
-  interleave chunks (data bytes = 16 x interleave x that word, all channels together). Then the
-  channels' PS-ADPCM data interleaved in chunks of that size (16-byte blocks: shift/filter,
-  flags, 14 bytes of nibbles), the first block of each channel silent.
+- u32 entry count, then 32-byte entries: name (up to 8 characters, NUL-terminated by byte 8 at
+  the latest; MSTREAM upper-cases the first 8 bytes), words, the stream's byte offset (+0x10), a
+  word, an unused word (MSTREAM keeps the file handle there), and a kind (+0x1C): 0 for streams,
+  2 for sounds loaded whole (effects, jingles).
+- At each stream's offset, a 16-byte header: channels (1-8), sample rate (48000, 44100, 22050;
+  a rate MSTREAM has no pitch for, such as ST10's 22000, plays silent), the interleave in 16-byte
+  ADPCM blocks (MSTREAM's SPU buffer size; below 0x300 it uses 3 IOP buffers, else 2) and the
+  length in interleave chunks, all channels together. Then the channels' PS-ADPCM data in turn,
+  one chunk of `interleave` blocks (0x3000 bytes for the music) per channel (16-byte blocks:
+  shift/filter, flags, 14 bytes of nibbles), the first block of each channel silent. Every sound
+  ends with an end flag (1) followed by a self-looping silent block (7).
 - Stage songs are cut into sections (ST01: `INTs INT A1 B1aT B1aL ... C1a-d ENDs ENDa-d`, 8-46 s),
   all 8 channels at 48 kHz, interleave 0x300; jingles and voices (`Lose Win Result Pause Select OK
-  Cancel P1atms ... Win_P1-6`) are 1-2 channels. The 8 channels are separate tracks (as loud as
-  each other, uncorrelated, continuous across chunks -- `tools/audio/imc.py wav` decodes them);
-  which track is which is still to be listened to. The stage 1 battle pans channel 0 left, 1
-  right, 2-5 centre, and starts 4 and 5 silent.
+  Cancel P1atms ... Win_P1-6`) are 1-2 channels. In ST01's A1, channels 0-1 are a stereo pair
+  (the backing, -12 dBFS), 2 and 4 carry the same mono part, as do 3 and 5, and 6-7 are a second
+  stereo pair (`tools/audio/imc.py wav` decodes them). The battle pans 0 left, 1 right, 2-5
+  centre and starts 4 and 5 silent, so the duplicated parts are faded between per player action;
+  which is which is still to be listened to.
 
-## Native replacement
+## Native engine
 
-What has to exist for the IOP emulator to leave the sound path:
+Native sound is the default. It replaces the three drivers (`ps2xRuntime/src/lib/ps2_native_sound.cpp`):
+their module loads succeed without the IOP, the runtime binds and answers SIDs 0x1563 and
+0x80000701 itself, and the emulated SPU2 is disconnected from the audio device. The IOP emulator
+still runs the other modules (pad, memory card) until those become host services too. With
+`PS2X_NATIVE_AUDIO=0` the drivers run on the IOP emulator as before, which is the reference.
 
-1. Answer MSTREAM's RPCs (SID 0x1563) in the runtime instead of forwarding them to the IOP, with
-   the same replies (opens, status, song clock).
-2. An IMC reader and PS-ADPCM decoder (the SPU2 model's decoder is the reference).
-3. A mixer: per stream channel, volume and pan as the game sets them, the sample-rate conversion
-   the SPU pitch implies, the event queue for section changes, effects loaded whole.
-4. The song clock from the mixer's own sample count (what the device has actually played,
-   minus its latency), instead of a voice address sampled at vblank.
-5. SDRDRV's calls: master volume at start-up, and for movies the PCM ring the EE writes (over SIF
-   DMA to IOP 0x8AB40, 0x6000 bytes, SPU2 AutoDMA layout) played by the mixer, with
-   `sceSdBlockTransStatus` answered from the mixer's position in it.
+- **Data.** A library open reads the IMC entry table. A stream open (0x1400) reads its header and
+  queues its data for a loader thread, which reads it into memory (a section is opened seconds
+  before it plays; the synchronous preload, 0x2000, waits for it). A sound loaded whole (0x1500) is
+  read at once, with the loop flags MSTREAM writes over the first and last blocks of each chunk.
+- **Voices.** Each stream channel is a host voice on the voice MSTREAM would have allocated (first
+  free of 24 per core; streams on core 0, sounds on core 1, a section shares its first section's
+  voices). It decodes PS-ADPCM with the SPU's filters, follows the data's loop and end flags and
+  steps by the SPU pitch for the stream's rate (Catmull-Rom between samples). Volume and pan go
+  through MSTREAM's pan law into the voice's left/right volume, and MSTREAM's per-voice volume
+  record is kept, so a voice keeps its stored pan across streams as on the PS2.
+- **Mix.** Like the SPU2's dry path: voices summed per core, core 0 plus the movie input through
+  its master volume into core 1, core 1's master volume, 16-bit clamps at the same points.
+  Reverb is not mixed: its volume stays 0 in this game (a warning prints if it is ever set).
+- **Section changes.** MSTREAM switches a playing stream to the queued section (0x5800) at an
+  exact block: the voices do the same, from the queued stream's first block, at that block.
+- **Status.** The status word (0x0900, polled every frame) changes on MSTREAM's refill schedule:
+  a round each time the lead voice reaches a chunk boundary of the current stream, which switches
+  to the queued section once the next upload would cross the change (1-2 chunks, up to ~0.9 s,
+  before it is heard) and ends the stream after its last chunk round. The engine keeps that
+  schedule (with the counters MSTREAM keeps, including the IOP buffer count that gives a stream
+  with interleave 0x300 two more rounds than one below), since the game reacts to the status.
+- **Song clock.** At each vblank the clock voice's position since key-on, minus the audio still
+  buffered ahead of the speaker, in whole 28-sample blocks, never decreasing; 0x5600 returns the
+  last vblank's value, as MSTREAM's vblank handler did.
+- **Movies.** SDRDRV's AutoDMA ring: the ring is copied from IOP memory when the transfer starts
+  and kept current from the EE's SIF DMA writes into it; the mixer plays it (blocks of 256 left
+  then 256 right samples) and `sceSdBlockTransStatus` reports the half and the address two blocks
+  ahead of the sample playing, like the SPU2's DMA.
+- **Clock.** By default the audio device's callback pulls the mix (`PS2X_NATIVE_AUDIO_CLOCK`
+  unset): sound and song clock follow the device, not the game thread, so a stall in the game no
+  longer stalls the music. `PS2X_NATIVE_AUDIO_CLOCK=ee` mixes on emulated time instead, like the
+  SPU2 it replaces, which makes runs comparable sample for sample with the reference.
+  `PS2X_NATIVE_AUDIO_CLOCK_OFFSET_MS` overrides how far the song clock trails the mix.
+- `PS2X_TRACE_NATIVE_AUDIO=1` prints opens, plays, section changes and status changes.
 
-Check: render the same scripted runs both ways and compare the mixed output and the song-clock
-values the game reads.
+Not handled (never used by the game): MSTREAM's opens by file path or from EE memory (0x1000,
+0x1100, 0x1300) reply failure with a warning; SDRDRV calls other than init, parameters, switches,
+voice and block transfers print a warning.
 
-Open questions: which of the 8 tracks is which (listen); how a section ends and loops; the 0x5800
-flag and how the event thread decides "near the end"; reverb (the effect area is set up at
-start-up; is it audible?); the paths a scripted run does not reach (winning, the versus mode).
+### Checking it
+
+`tools/audio/mstream_diff.py <reference.log> <native.log>` compares two `PS2X_TRACE_MSTREAM=1`
+runs: the requests and replies in order, and each stream's status changes with the song clock at
+the time. `tools/audio/wav_compare.py <reference.wav> <native.wav>` compares `PS2X_AUDIO_DUMP`
+recordings window by window (best lag, levels, residual).
+
+Results (2026-11-08, `stage1_battle.txt` from boot, 900 s, against `PS2X_NATIVE_AUDIO=0`):
+
+| | emulated clock (`ee`) | device clock (default) |
+|---|---|---|
+| MSTREAM requests and arguments | all 1493 identical, in order | all 1493 identical, in order |
+| replies | identical except words holding the song clock | same |
+| status changes | the same 27, in order; song clock at each within 450 samples | the same 27; within ~1000 samples (the 720-frame device offset) |
+| song clock rate | 800 samples per vblank, as the reference | 800 per vblank |
+| mixed output | title, menus, effects and battle music bit-exact once aligned (residual -inf dB); the rest differs only where the game moved a volume or played an effect at another moment | no discontinuities the reference does not have |
+
+Movies (boot without input, 300 s, SDRDRV's ring): bit-exact once aligned, no discontinuities.
+Between the two runs the movie player resyncs by whole laps of its 0x6000-byte ring (128 ms)
+about every 12 s, a difference in how fast video and sound advanced in each run rather than in the
+samples. The first version read the ring live and played blocks the player had already
+overwritten for the next lap (3500 clicks); it now copies each block when the SPU2's DMA would.
+
+### Open
+
+- Listening: which duplicated part is which, and whether the device-clocked song clock (trailing
+  the mix by the device buffer) feels as the PS2 does; `PS2X_NATIVE_AUDIO_CLOCK_OFFSET_MS` tunes it.
+- Paths the scripted runs do not reach: winning, the versus mode, stages 2-10 (same commands per
+  the census).
+- The IOP emulator still loads the pad and memory card modules; once those are host services it
+  goes, and with it the SPU2 model's stepping.
 
 ## Census
 
