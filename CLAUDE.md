@@ -3,6 +3,23 @@
 Gitaroo Man (PS2, SLUS-20294) ported to native code by static recompilation. Read README.md for
 the build; this file is the working rules and the facts that are expensive to rediscover.
 
+## Goal
+
+A standalone PC version of the game, with the emulation layer eliminated, not made faster or more
+exact. Native means the game's own (recompiled) code plus host code that does what the game
+intends: play this sound, stream this song, draw this mesh, read this file, save to the card.
+Emulation means reproducing PS2 hardware behaviour -- registers, cycles, DMA, interrupts, the IOP
+and its modules, VU memory, GS packets -- and it stays emulation when it is written in C++,
+recompiled, or lifted. Judge work by whether it removes such a layer; say so plainly when a task
+only improves one. The emulated paths remain as the reference that native replacements are
+checked against (see "Prove replacements").
+
+What is still emulation, in the order it is being replaced: sound (IOP emulator, lifted SDRDRV/
+MSTREAM/LIBSD, the SPU2 model) -> a native audio engine serving the game's sound RPCs; CD, memory
+card and pad modules -> host services, after which the IOP emulator goes; VU1 microprogram and the
+GS -> rendering at the AIR.NGP render-context level; the EE scheduler's cycle accounting and the
+interpreter for runtime-generated draw loops.
+
 ## Hard rules
 
 - **Never commit game material**: no ISO/ELF/IRX/BIOS/save files, memory or VRAM dumps, screenshots,
