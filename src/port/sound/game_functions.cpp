@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <string>
 
 namespace
 {
@@ -25,6 +27,19 @@ namespace
     {
         SET_GPR_S32(ctx, 2, value);
         ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    bool openLibraryOnDisc(PS2Runtime &runtime, const char *name, uint32_t size)
+    {
+        const std::string path(name, std::find(name, name + std::min(size, 0x3Eu), '\0'));
+        const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
+        std::filesystem::path host;
+        if (!runtime.vfs().resolveHostPath(path, {paths.hostRoot, paths.cdRoot, paths.mcRoot}, host))
+        {
+            std::fprintf(stderr, "[sound] cannot resolve library %s\n", path.c_str());
+            return false;
+        }
+        return port::sound::openLibrary(host.string());
     }
 
     uint32_t load32(uint8_t *rdram, uint32_t address)
@@ -97,7 +112,16 @@ void FUN_0023e690_0x23e690(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtim
     }
     uint8_t answer[16];
     const uint8_t *request = send ? getConstMemPtr(rdram, send) : nullptr;
-    port::sound::request(*runtime, fno, request, sendSize, answer);
+    if ((fno & 0xFFFFFF00u) == 0x1A00u && request)
+    {
+        // Opening a library names a file on the game's disc; the engine only deals in host paths.
+        std::memset(answer, 0, sizeof(answer));
+        answer[0] = openLibraryOnDisc(*runtime, reinterpret_cast<const char *>(request), sendSize) ? 0u : 1u;
+    }
+    else
+    {
+        port::sound::request(fno, request, sendSize, answer);
+    }
     if (uint8_t *out = getMemPtr(rdram, reply))
     {
         std::memset(out, 0, replySize);
@@ -151,7 +175,7 @@ void FUN_0023f660_0x23f660(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
     setField(rdram, ad, kSize, GPR_U32(ctx, 6));
     setField(rdram, ad, kPcmRingSize, GPR_U32(ctx, 7));
     port::sound::movieOpen(GPR_U32(ctx, 7));
-    port::sound::setMaster(static_cast<uint16_t>(load32(rdram, kMoviePlayerVolume)));
+    port::sound::setMovieVolume(static_cast<uint16_t>(load32(rdram, kMoviePlayerVolume)));
     returnValue(ctx, 1);
 }
 
@@ -159,7 +183,7 @@ void FUN_0023f660_0x23f660(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
 void FUN_0023f5e0_0x23f5e0(uint8_t *, R5900Context *ctx, PS2Runtime *)
 {
     port::sound::moviePlay(false);
-    port::sound::setMaster(0u);
+    port::sound::setMovieVolume(0u);
     returnValue(ctx, 1);
 }
 

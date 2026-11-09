@@ -1,17 +1,13 @@
 // The game's sound, native (docs/native-audio.md).
 //
-// The game asks for sound through iNiS's MSTREAM driver on the PS2's IOP. Here those requests are
-// served directly (src/port/sound/game_functions.cpp replaces the game's request function): each
-// stream channel is a host voice reading PS-ADPCM from the IMC libraries, and the sound card pulls
-// the mix. What the game can observe is kept as MSTREAM has it: the reply words (the reply buffer is
-// never cleared, so stale words stay), stream slot and voice allocation (a voice keeps its stored
-// volume and pan across streams), the status word, which MSTREAM changes on its refill schedule
-// rather than when the sound is heard, and the song clock in 28-sample blocks. Addresses in
-// comments are MSTREAM's (base 0x4AA00).
+// The game asks for sound through one request function (src/port/sound/game_functions.cpp): open
+// a library, open and play named streams, set volume and pan, queue the next song section, read the
+// song clock. This engine does those things directly: each stream channel decodes its PS-ADPCM from
+// the IMC library and the sound card pulls the mix. The request numbers are the game's; everything
+// else is ours.
 #include "sound_engine.h"
 
 #include "audio_device.h"
-#include "ps2_runtime.h"
 
 #include <algorithm>
 #include <array>
@@ -36,38 +32,26 @@ namespace port::sound
 {
     namespace
     {
-        constexpr int kSlots = 256;
-        constexpr int kVoices = 24;
-        constexpr int kQueueEntries = 256;
+        constexpr uint32_t kOutputRate = 48000u;
+        constexpr int kMaxStreams = 256;
+        constexpr int kMaxChannels = 8;
         constexpr int kLibraryEntries = 128;
-
-        bool envOn(const char *name)
-        {
-            const char *value = std::getenv(name);
-            return value && *value && std::strcmp(value, "0") != 0;
-        }
+        constexpr uint32_t kSamplesPerBlock = 28u;
 
         bool traceOn()
         {
-            static const bool on = envOn("GITAROO_TRACE_SOUND");
+            static const bool on = [] { const char *v = std::getenv("GITAROO_TRACE_SOUND"); return v && *v && std::strcmp(v, "0") != 0; }();
             return on;
         }
 
-#define NATIVE_AUDIO_TRACE(...)                        \
-    do                                                 \
-    {                                                  \
-        if (traceOn())                                 \
-        {                                              \
-            std::fprintf(stderr, "[sound] " __VA_ARGS__); \
-        }                                              \
-    } while (0)
+#define SOUND_TRACE(...) do { if (traceOn()) std::fprintf(stderr, "[sound] " __VA_ARGS__); } while (0)
 
         int32_t clamp16(int32_t value)
         {
             return std::clamp(value, -32768, 32767);
         }
 
-        // MSTREAM's volumes are 15-bit: 0x3FFF is full scale.
+        // The game's volumes are 15-bit: 0x3FFF is full scale.
         float volumeGain(uint16_t volume)
         {
             return static_cast<float>(static_cast<int16_t>(static_cast<uint16_t>(volume << 1u))) / 32768.0f;
@@ -85,30 +69,13 @@ namespace port::sound
             return clamp16(static_cast<int32_t>(w[1] + v / 2));
         }
 
-        // The SPU pitch for a stream's sample rate (0x4EB40); 0 (silent) for any other rate.
-        uint16_t pitchForRate(int32_t rate)
-        {
-            switch (rate)
-            {
-            case 11025: return 0x3AD;
-            case 16000: return 0x555;
-            case 22050: return 0x75A;
-            case 32000: return 0xAAB;
-            case 44100: return 0xEB3;
-            case 48000: return 0x1000;
-            default: return 0;
-            }
-        }
-
         uint32_t readU32(const uint8_t *p)
         {
             return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
                    (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
         }
 
-        // PS-ADPCM data of one sound as its voices read it: channel c's block b is at 16-byte
-        // index ((b / span) * channels + c) * span + b % span, which is the IMC layout of a stream
-        // (span = interleave) and channel-major for sounds loaded whole (span = all its blocks).
+        // PS-ADPCM data of one IMC entry: the channels take turns, `span` 16-byte blocks each.
         struct SoundData
         {
             uint32_t channels = 1;
@@ -202,88 +169,68 @@ namespace port::sound
             std::thread m_thread;
         };
 
+        // One channel of a playing stream.
         struct Voice
         {
-            // Left and right volume from MSTREAM's pan law, and the rate.
-            uint16_t volL = 0;
-            uint16_t volR = 0;
-            uint16_t pitch = 0;
-
-            // Keyed on and not off: the voice's timeline runs (the refill schedule and the song
-            // clock follow it), whether or not it still has data to play.
-            bool keyed = false;
-            bool sounding = false;
+            bool playing = false;  // started and not stopped; its position keeps counting
+            bool sounding = false; // still has data to play
+            bool loop = false;
             std::shared_ptr<const SoundData> data;
             uint32_t channel = 0;
+            uint32_t step = 0x1000; // source samples per output sample, 12-bit fraction
             uint32_t block = 0;
-            uint32_t loopBlock = 0;
             bool endAfterBlock = false;
-            int16_t decoded[28]{};
-            uint32_t decodedPos = 28;
-            int32_t hist1 = 0;
-            int32_t hist2 = 0;
+            int16_t decoded[kSamplesPerBlock]{};
+            uint32_t decodedPos = kSamplesPerBlock;
+            int32_t hist1 = 0, hist2 = 0;
             std::array<int32_t, 4> window{};
             uint32_t phase = 0;
-            uint64_t samples = 0; // consumed since key-on
+            uint64_t samples = 0; // consumed since the start
 
-            // A seamless section change: from timeline block `switchAt` on, play `next` from its start.
+            // A seamless section change: from block `switchAt` on, play `next` from its start.
             std::shared_ptr<const SoundData> next;
-            uint32_t nextChannel = 0;
             uint64_t switchAt = UINT64_MAX;
         };
 
-        // MSTREAM's per-voice record (0x54B20 + core * 0x120 + voice * 12).
-        struct VoiceRecord
+        struct Channel
         {
-            bool used = false;
+            Voice voice;
             uint16_t volume = 0;
-            uint16_t pan = 0;
-            int32_t mute = 0;
+            uint16_t pan = 0x3FFF;
+            float left = 0.0f, right = 0.0f;
         };
 
-        // MSTREAM's 0xF8-byte stream record (0x55FB0 + id * 0xF8), the fields that matter.
-        struct Slot
+        // The channels a stream plays on. The sections of a song share one group, so its volumes and
+        // pans carry across section changes.
+        struct Group
         {
-            int32_t kind = 0; // +0x00: 0 free, 1 library stream, 3 loaded whole, 4 from EE memory
-            int32_t channels = 0, rate = 0, interleave = 0, length = 0; // +0x04..+0x10, the IMC header
-            int32_t shareBase = 0;   // +0x14: -1, or the stream whose voices this one plays on
-            int32_t fromLibrary = 0; // +0x18
-            int32_t entry = 0;       // +0x1C
-            int32_t voices[8]{};     // +0x20
-            int32_t core = 0;        // +0x60
-            uint16_t pitch = 0;      // +0x64
-            int32_t rows = 0;        // +0x68: length / channels, chunks of `interleave` blocks per channel
-            int32_t consumed = 0;    // +0x7C: blocks of the IOP buffer uploaded, all channels
-            int32_t status = 0;      // +0x84
-            int32_t preloading = 0;  // +0xEC
+            std::array<Channel, kMaxChannels> channels;
+            int count = 0;
+        };
+
+        struct Stream
+        {
+            bool open = false;
+            bool wholeSound = false; // a short sound rather than streamed music
+            bool loop = false;
+            bool ownsGroup = false;
+            bool playing = false;
+            int channels = 0, rate = 0, interleave = 0, rows = 0;
+            std::shared_ptr<Group> group;
             std::shared_ptr<SoundData> data;
-        };
-
-        // A stream being refilled (MSTREAM's per-core refill list at 0x522C0, one entry per channel;
-        // all channels of a stream move together, so one record per stream). Rounds fall on the
-        // current stream's chunk boundaries: MSTREAM points the SPU IRQ at the start of the next
-        // chunk, and after a section change at the new section's chunks, which the split shifted.
-        struct Run
-        {
-            int32_t slot = -1;
-            uint32_t span = 0;        // SPU buffer size in blocks (+0x74, the interleave)
-            uint64_t streamStart = 0; // timeline block where the current stream began
-            uint32_t nextRound = 1;   // the next round is at streamStart + nextRound * span
-            int32_t counter = 0;      // entry +0x18
-            int32_t limit = 0;        // entry +0x14
         };
 
         struct LibraryEntry
         {
             char name[9]{};
             uint32_t offset = 0;
-            uint32_t kind = 0;
         };
 
         // The movie's PCM on its way to the mixer: blocks of 256 left then 256 right samples.
         struct Movie
         {
             bool playing = false;
+            float gain = 0.0f;
             std::vector<uint8_t> ring;
             size_t read = 0, write = 0, queued = 0;
             uint32_t frame = 0; // within the block at `read`
@@ -294,12 +241,6 @@ namespace port::sound
         public:
             void start()
             {
-                {
-                    std::lock_guard<std::mutex> lock(m_mutex);
-                    if (m_started)
-                        return;
-                    m_started = true;
-                }
                 if (device::open(&Engine::pull, this))
                     m_clockOffsetFrames = device::bufferedFrames();
                 else
@@ -313,44 +254,48 @@ namespace port::sound
                 std::printf("[sound] native sound, song clock %lld frames behind the mix\n", static_cast<long long>(m_clockOffsetFrames));
             }
 
-            void request(PS2Runtime &runtime, uint32_t fno, const uint8_t *send, uint32_t sendSize, uint8_t *reply)
+            void request(uint32_t fno, const uint8_t *send, uint32_t sendSize, uint8_t *reply)
             {
-                std::array<uint32_t, 16> args{};
+                std::array<uint32_t, 4> args{};
                 std::array<uint8_t, 64> raw{};
                 if (send)
                 {
                     std::memcpy(args.data(), send, std::min<size_t>(sendSize, sizeof(args)));
                     std::memcpy(raw.data(), send, std::min<size_t>(sendSize, raw.size()));
                 }
-                std::lock_guard<std::mutex> lock(m_mutex);
-                mstream(runtime, fno, args, raw);
-                std::memcpy(reply, m_reply.data(), 16u);
+                std::array<uint32_t, 4> answer{};
+                std::unique_lock<std::mutex> lock(m_mutex);
+                handle(fno, args, raw, answer, lock);
+                std::memcpy(reply, answer.data(), sizeof(answer));
             }
 
-            // MSTREAM's vblank handler (0x4DA4C -> 0x4D830): the clock voice's position, in blocks of
-            // 28 samples, never going back. The game reads the value of the last vblank.
+            // Once per game frame: the song clock the game reads until the next one, in whole
+            // blocks, never going back. It trails the mix by what the sound card still holds.
             void latchSongClock()
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
-                if (!m_clockRunning || !m_threads)
+                if (!m_clockGroup || !m_clockRunning)
                     return;
-                const Voice &v = voice(m_clockCore, m_clockVoice);
-                const int64_t behind = m_clockOffsetFrames * v.pitch / 0x1000;
-                const int64_t samples = static_cast<int64_t>(v.samples) - behind;
+                const Voice &v = m_clockGroup->channels[0].voice;
+                const int64_t samples = static_cast<int64_t>(v.samples) - m_clockOffsetFrames * v.step / 0x1000;
                 if (samples > 0)
-                    m_clock = std::max<uint32_t>(m_clock, static_cast<uint32_t>(samples / 28) * 28u);
+                    m_clock = std::max<uint32_t>(m_clock, static_cast<uint32_t>(samples / kSamplesPerBlock) * kSamplesPerBlock);
             }
 
-            void setMaster(uint16_t volume)
+            // The movie player's volume setting is applied twice on the PS2's output path.
+            void setMovieVolume(uint16_t volume)
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
-                m_master = volumeGain(volume);
+                const float gain = volumeGain(volume);
+                m_movie.gain = gain * gain;
             }
 
             void movieOpen(uint32_t bytes)
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
+                const float gain = m_movie.gain;
                 m_movie = Movie{};
+                m_movie.gain = gain;
                 m_movie.ring.assign(bytes & ~0x3FFu, 0u);
             }
 
@@ -407,49 +352,8 @@ namespace port::sound
             }
 
             // ---------------------------------------------------------------------------------
-            // Voices
+            // Decoding
             // ---------------------------------------------------------------------------------
-
-            Voice &voice(int32_t core, int32_t index)
-            {
-                return m_voices[core & 1][static_cast<uint32_t>(index) % kVoices];
-            }
-
-            void keyOn(int32_t core, uint32_t mask)
-            {
-                for (int32_t i = 0; i < kVoices; ++i)
-                {
-                    if ((mask & (1u << i)) == 0u)
-                        continue;
-                    Voice &v = voice(core, i);
-                    v.keyed = true;
-                    v.sounding = v.data != nullptr;
-                    v.block = 0;
-                    v.loopBlock = 0;
-                    v.endAfterBlock = false;
-                    v.decodedPos = 28;
-                    v.hist1 = v.hist2 = 0;
-                    v.window = {};
-                    v.phase = 0;
-                    v.samples = 0;
-                    v.next.reset();
-                    v.switchAt = UINT64_MAX;
-                }
-            }
-
-            void keyOff(int32_t core, uint32_t mask)
-            {
-                for (int32_t i = 0; i < kVoices; ++i)
-                {
-                    if ((mask & (1u << i)) == 0u)
-                        continue;
-                    Voice &v = voice(core, i);
-                    v.keyed = false;
-                    v.sounding = false;
-                    v.next.reset();
-                    v.switchAt = UINT64_MAX;
-                }
-            }
 
             void fetchBlock(Voice &v)
             {
@@ -459,14 +363,12 @@ namespace port::sound
                     v.sounding = false;
                     v.endAfterBlock = false;
                 }
-                if (v.next && v.samples / 28u == v.switchAt)
+                if (v.next && v.samples / kSamplesPerBlock == v.switchAt)
                 {
                     v.data = std::move(v.next);
-                    v.channel = v.nextChannel;
                     v.next.reset();
                     v.switchAt = UINT64_MAX;
                     v.block = 0;
-                    v.loopBlock = 0;
                     v.sounding = true;
                 }
                 const SoundData *data = v.data.get();
@@ -474,16 +376,9 @@ namespace port::sound
                 if (v.sounding && data)
                 {
                     if (!data->ready.load(std::memory_order_acquire))
-                    {
-                        if (!m_warnedUnloaded)
-                            NATIVE_AUDIO_TRACE("voice reached data still loading\n");
-                        m_warnedUnloaded = true;
-                        ++v.block;
-                    }
+                        ++v.block; // still loading: silence, keeping time
                     else if (v.block >= data->blocksPerChannel || !(b = data->block(v.channel, v.block)))
-                    {
                         v.sounding = false;
-                    }
                 }
                 if (!b)
                 {
@@ -498,7 +393,7 @@ namespace port::sound
                 const uint8_t flags = b[1];
                 if (shift > 12u)
                     shift = 9u;
-                for (uint32_t i = 0; i < 28u; ++i)
+                for (uint32_t i = 0; i < kSamplesPerBlock; ++i)
                 {
                     const int32_t nibble = (b[2 + i / 2] >> ((i & 1u) * 4u)) & 0xF;
                     int32_t sample = static_cast<int16_t>(static_cast<uint16_t>(nibble << 12)) >> shift;
@@ -508,14 +403,11 @@ namespace port::sound
                     v.hist1 = sample;
                     v.decoded[i] = static_cast<int16_t>(sample);
                 }
-                // Loop flags, as the data and MSTREAM leave them: 4 marks the loop start; 1 ends the
-                // block, then jumps back with 2 (repeat) or stops the voice without.
-                if (flags & 4u)
-                    v.loopBlock = v.block;
+                // Bit 0 of a block's flags marks the end of the sound.
                 if (flags & 1u)
                 {
-                    if (flags & 2u)
-                        v.block = v.loopBlock;
+                    if (v.loop)
+                        v.block = 0;
                     else
                     {
                         v.endAfterBlock = true;
@@ -531,11 +423,11 @@ namespace port::sound
             int32_t voiceSample(Voice &v)
             {
                 const int32_t out = catmullRom(v.window, v.phase & 0xFFFu);
-                v.phase += std::min<uint32_t>(v.pitch, 0x3FFFu);
+                v.phase += v.step;
                 while (v.phase >= 0x1000u)
                 {
                     v.phase -= 0x1000u;
-                    if (v.decodedPos >= 28u)
+                    if (v.decodedPos >= kSamplesPerBlock)
                         fetchBlock(v);
                     v.window[0] = v.window[1];
                     v.window[1] = v.window[2];
@@ -550,31 +442,31 @@ namespace port::sound
             // Mixer
             // ---------------------------------------------------------------------------------
 
-            // Streams and movies pass through the master volume twice, effects once: on the PS2 they
-            // reach the output through its two sound cores in turn.
             void render(int16_t *out, uint32_t frames)
             {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 for (uint32_t f = 0; f < frames; ++f)
                 {
-                    float music[2] = {}, effects[2] = {};
-                    for (int32_t c = 0; c < 2; ++c)
+                    float mix[2] = {};
+                    for (const std::shared_ptr<Group> &group : m_groups)
                     {
-                        float *bus = c == 0 ? music : effects;
-                        for (Voice &v : m_voices[c])
+                        for (int c = 0; c < group->count; ++c)
                         {
-                            if (!v.keyed)
+                            Channel &channel = group->channels[c];
+                            if (!channel.voice.playing)
                                 continue;
-                            const float s = static_cast<float>(voiceSample(v));
-                            bus[0] += s * volumeGain(v.volL);
-                            bus[1] += s * volumeGain(v.volR);
+                            const float s = static_cast<float>(voiceSample(channel.voice));
+                            mix[0] += s * channel.left;
+                            mix[1] += s * channel.right;
                         }
                     }
+                    mix[0] *= m_master;
+                    mix[1] *= m_master;
                     if (m_movie.playing && m_movie.queued >= 0x400u)
                     {
                         const size_t at = m_movie.read + m_movie.frame * 2u;
-                        music[0] += static_cast<float>(static_cast<int16_t>(m_movie.ring[at] | (m_movie.ring[at + 1u] << 8)));
-                        music[1] += static_cast<float>(static_cast<int16_t>(m_movie.ring[at + 0x200u] | (m_movie.ring[at + 0x201u] << 8)));
+                        mix[0] += m_movie.gain * static_cast<float>(static_cast<int16_t>(m_movie.ring[at] | (m_movie.ring[at + 1u] << 8)));
+                        mix[1] += m_movie.gain * static_cast<float>(static_cast<int16_t>(m_movie.ring[at + 0x200u] | (m_movie.ring[at + 0x201u] << 8)));
                         if (++m_movie.frame == 256u)
                         {
                             m_movie.frame = 0;
@@ -582,115 +474,55 @@ namespace port::sound
                             m_movie.queued -= 0x400u;
                         }
                     }
-                    const float twice = m_master * m_master;
-                    for (int ch = 0; ch < 2; ++ch)
-                        out[f * 2u + static_cast<uint32_t>(ch)] = static_cast<int16_t>(
-                            clamp16(static_cast<int32_t>(std::lrint(music[ch] * twice + effects[ch] * m_master))));
-
-                    if (m_threads)
-                        refillRounds();
+                    out[f * 2u] = static_cast<int16_t>(clamp16(static_cast<int32_t>(std::lrint(mix[0]))));
+                    out[f * 2u + 1u] = static_cast<int16_t>(clamp16(static_cast<int32_t>(std::lrint(mix[1]))));
+                    updateStreams();
                 }
             }
 
-            // ---------------------------------------------------------------------------------
-            // MSTREAM's refill schedule (the refill threads 0x4D020 and FUN_0004cc4c), kept for
-            // what it makes visible: when a stream's status changes. On the PS2 a refill round runs
-            // each time the lead voice enters the next SPU buffer (its IRQ); the round uploads the
-            // buffer after it, so a section change and a stream's end show in the status a buffer
-            // or two before they are heard.
-            // ---------------------------------------------------------------------------------
-
-            void refillRounds()
+            // A section change takes effect, and a stream that has played out stops reporting as playing.
+            void updateStreams()
             {
-                for (size_t i = 0; i < m_runs.size();)
+                if (m_change.to >= 0 && m_music >= 0)
                 {
-                    Run &run = m_runs[i];
-                    Slot &s = m_slots[run.slot];
-                    const Voice &lead = voice(s.core, s.voices[0]);
-                    if (!lead.keyed || run.span == 0u ||
-                        lead.samples / 28u < run.streamStart + static_cast<uint64_t>(run.nextRound) * run.span)
+                    const Voice &lead = m_streams[m_music].group->channels[0].voice;
+                    if (lead.samples / kSamplesPerBlock >= m_change.at)
+                    {
+                        SOUND_TRACE("section change: stream %d -> %d\n", m_music, m_change.to);
+                        m_streams[m_music].playing = false;
+                        m_streams[m_change.to].playing = true;
+                        std::replace(m_streaming.begin(), m_streaming.end(), m_music, m_change.to);
+                        m_music = m_change.to;
+                        m_musicStart = m_change.at;
+                        m_change = SectionChange{};
+                    }
+                }
+                for (size_t i = 0; i < m_streaming.size();)
+                {
+                    Stream &s = m_streams[m_streaming[i]];
+                    if (s.group->channels[0].voice.sounding)
                     {
                         ++i;
                         continue;
                     }
-                    if (!refillRound(run))
-                        m_runs.erase(m_runs.begin() + static_cast<std::ptrdiff_t>(i));
-                    else
-                        ++i;
+                    s.playing = false;
+                    if (m_streaming[i] == m_music)
+                        m_music = -1;
+                    m_streaming.erase(m_streaming.begin() + static_cast<std::ptrdiff_t>(i));
                 }
-            }
-
-            // One round: the uploads (FUN_0004cc4c per channel), which may switch to the queued
-            // section, then the end check. Returns false once the stream has left the refill list.
-            bool refillRound(Run &run)
-            {
-                const uint32_t span = run.span;
-                // Blocks of the current stream in the voice's buffers before this round's upload.
-                const uint32_t uploaded = (run.nextRound + 1u) * span;
-                const uint32_t pos = m_eventPos;
-                ++run.nextRound;
-                if (pos != 0xFFFFFFFFu && m_eventSlot >= 0 && pos - 2u * span <= uploaded && uploaded >= pos - span)
-                {
-                    Slot &from = m_slots[run.slot];
-                    Slot &to = m_slots[m_eventSlot];
-                    const uint64_t switchAt = run.streamStart + pos;
-                    for (int32_t c = 0; c < from.channels && c < 8; ++c)
-                    {
-                        Voice &v = voice(from.core, from.voices[c]);
-                        v.next = to.data;
-                        v.nextChannel = static_cast<uint32_t>(c);
-                        v.switchAt = switchAt;
-                    }
-                    NATIVE_AUDIO_TRACE("section change: stream %d -> %d at block %u (timeline %llu), status flips now\n", run.slot,
-                                       m_eventSlot, pos, static_cast<unsigned long long>(switchAt));
-                    from.status = 0;
-                    to.status = 1;
-                    run.slot = m_eventSlot;
-                    run.streamStart = switchAt;
-                    run.nextRound = 0;
-                    run.counter = 0;
-                    run.limit = to.rows;
-                    m_eventPos = 0xFFFFFFFFu;
-                }
-                if (run.counter < run.limit - 1)
-                {
-                    ++run.counter;
-                    return true;
-                }
-                NATIVE_AUDIO_TRACE("stream %d leaves the refill list, status 0\n", run.slot);
-                m_slots[run.slot].status = 0;
-                return false;
-            }
-
-            void removeRun(int32_t slot)
-            {
-                m_runs.erase(std::remove_if(m_runs.begin(), m_runs.end(), [&](const Run &r) { return r.slot == slot; }),
-                             m_runs.end());
             }
 
             // ---------------------------------------------------------------------------------
-            // MSTREAM (dispatch 0x4EE6C)
+            // Requests
             // ---------------------------------------------------------------------------------
 
-            // Voice volume from MSTREAM's volume and pan (0x4E6D8).
-            void applyVolume(int32_t core, int32_t index, uint32_t volume, uint32_t pan)
+            // The game's stereo pan law: pan 0x3FFF is the centre; away from it the far side fades.
+            static void applyVolume(Channel &c)
             {
-                volume &= 0xFFFFu;
-                pan &= 0xFFFFu;
+                const int32_t vol = c.volume;
+                const uint32_t pan = c.pan;
                 int32_t left = 0, right = 0;
-                const int32_t vol = static_cast<int32_t>(volume);
-                if (vol == 0)
-                {
-                }
-                else if (!m_stereo)
-                {
-                    int32_t d = static_cast<int32_t>(pan) - 0x3FFF;
-                    if (d < 0)
-                        d = -d;
-                    left = ((vol - (((d * 100) / 0x3FFF) * 0x3333) / 100) >> 1) & 0xFFFF;
-                    right = left;
-                }
-                else
+                if (vol != 0)
                 {
                     left = vol >> 1;
                     if (pan < 0x4000u)
@@ -705,623 +537,364 @@ namespace port::sound
                         left = far < 0x7FFF - vol ? 0 : ((far - (0x7FFF - vol)) >> 1) & 0xFFFF;
                     }
                 }
-                Voice &v = voice(core, index);
-                v.volL = static_cast<uint16_t>(left);
-                v.volR = static_cast<uint16_t>(right);
+                c.left = volumeGain(static_cast<uint16_t>(left));
+                c.right = volumeGain(static_cast<uint16_t>(right));
             }
 
-            VoiceRecord &record(int32_t core, int32_t index)
+            Stream *stream(uint32_t id)
             {
-                return m_records[core & 1][static_cast<uint32_t>(index) % kVoices];
+                return id < kMaxStreams && m_streams[id].open ? &m_streams[id] : nullptr;
             }
 
-            void setVolume(int32_t core, int32_t index, uint16_t volume, bool store) // 0x4E8A0
+            Channel *channel(uint32_t id, uint32_t index)
             {
-                if (store)
-                    record(core, index).volume = volume;
-                applyVolume(core, index, volume, record(core, index).pan);
+                Stream *s = stream(id);
+                return s && index < static_cast<uint32_t>(s->group->count) ? &s->group->channels[index] : nullptr;
             }
 
-            void setPan(int32_t core, int32_t index, uint16_t pan, bool store) // 0x4E90C
+            int freeStream() const
             {
-                if (store)
-                    record(core, index).pan = pan;
-                applyVolume(core, index, record(core, index).volume, pan);
-            }
-
-            void setMute(int32_t core, int32_t index, int32_t mute) // 0x4E574
-            {
-                record(core, index).mute = mute;
-                setVolume(core, index, mute == 0 ? record(core, index).volume : 0, false);
-            }
-
-            void setMasterVolume(uint16_t volume) // 0x4E97C
-            {
-                m_masterVolume = volume;
-                m_master = volumeGain(static_cast<uint16_t>(volume >> 1));
-            }
-
-            // A voice for a stream channel (0x4E3D0): the first free one on the core, silent until
-            // the game sets a volume.
-            int32_t allocVoice(int32_t core, uint16_t pitch)
-            {
-                for (int32_t i = 0; i < kVoices; ++i)
-                {
-                    VoiceRecord &r = record(core, i);
-                    if (r.used)
-                        continue;
-                    r.used = true;
-                    Voice &v = voice(core, i);
-                    v.pitch = pitch;
-                    applyVolume(core, i, 0x7FFF, 0x3FFF);
-                    setMute(core, i, 1);
-                    return i;
-                }
-                return -1;
-            }
-
-            uint32_t voiceMask(const Slot &s) const // 0x4F808
-            {
-                uint32_t mask = 0;
-                for (int32_t c = 0; c < s.channels && c < 8; ++c)
-                    mask |= 1u << (static_cast<uint32_t>(s.voices[c]) & 0x1Fu);
-                return mask;
-            }
-
-            int32_t freeSlot() // 0x4AD00: free means a zero length word
-            {
-                for (int32_t i = 0; i < kSlots; ++i)
-                    if (m_slots[i].length == 0)
+                for (int i = 0; i < kMaxStreams; ++i)
+                    if (!m_streams[i].open)
                         return i;
                 return -1;
             }
 
-            // FUN_0004ad64: header checks against the stream it shares voices with, derived sizes.
-            bool deriveSizes(int32_t id, bool share)
+            const LibraryEntry *lookup(const char *name) const
             {
-                Slot &s = m_slots[id];
-                if (share)
-                {
-                    const Slot &b = m_slots[s.shareBase & 0xFF];
-                    if (s.channels != b.channels || s.rate != b.rate || s.interleave != b.interleave)
-                    {
-                        NATIVE_AUDIO_TRACE("stream %d does not match the stream %d it shares voices with\n", id, s.shareBase);
-                        closeSlot(id);
-                        return false;
-                    }
-                }
-                s.rows = s.channels ? s.length / s.channels : 0;
-                s.pitch = pitchForRate(s.rate);
-                return true;
-            }
-
-            bool lookup(Slot &s, const char *name)
-            {
-                for (int32_t i = 0; i < m_libraryCount && i < kLibraryEntries; ++i)
-                {
+                for (int i = 0; i < m_libraryCount; ++i)
                     if (std::strcmp(m_library[i].name, name) == 0)
-                    {
-                        s.fromLibrary = 1;
-                        s.entry = i;
-                        break;
-                    }
-                }
-                return s.fromLibrary != 0;
+                        return &m_library[i];
+                return nullptr;
             }
 
-            bool readHeader(Slot &s)
+        public:
+            bool openLibrary(const std::string &path)
             {
-                std::vector<uint8_t> header;
-                const LibraryEntry &e = m_library[s.entry % kLibraryEntries];
-                if (!Loader::readRange(m_libraryPath, e.offset, 16u, header) || header.size() < 16u)
-                    return false;
-                s.channels = static_cast<int32_t>(readU32(header.data()));
-                s.rate = static_cast<int32_t>(readU32(header.data() + 4));
-                s.interleave = static_cast<int32_t>(readU32(header.data() + 8));
-                s.length = static_cast<int32_t>(readU32(header.data() + 12));
-                return s.channels >= 1 && s.channels <= 8;
-            }
-
-            void setOpenReply(int32_t id)
-            {
-                m_lastChannels = static_cast<uint32_t>(m_slots[id].channels);
-                m_lastRate = static_cast<uint32_t>(m_slots[id].rate);
-                m_lastId = static_cast<uint32_t>(id);
-            }
-
-            // 0x1400 (0x4B4A8): a stream from the library, read as it plays.
-            uint32_t openStream(const char *name, int32_t share, int32_t base)
-            {
-                const int32_t id = freeSlot();
-                if (id < 0)
-                    return 1;
-                Slot &s = m_slots[id];
-                s.core = 0;
-                if (share == 0)
-                    s.shareBase = -1;
-                else
-                {
-                    s.shareBase = base;
-                    m_slots[base & 0xFF].shareBase = base;
-                }
-                if (!lookup(s, name))
-                    return 1;
-                if (!readHeader(s))
-                {
-                    std::fprintf(stderr, "[sound] stream %s: bad header\n", name);
-                    return 1;
-                }
-                s.kind = 1;
-                if (!deriveSizes(id, share != 0))
-                    return 1;
-                if (share == 0)
-                {
-                    for (int32_t c = 0; c < s.channels; ++c)
-                    {
-                        const int32_t v = allocVoice(s.core, s.pitch);
-                        if (v < 0)
-                        {
-                            std::fprintf(stderr, "[sound] FATAL: no free voice for stream %s\n", name);
-                            return 1;
-                        }
-                        s.voices[c] = v;
-                    }
-                }
-                else
-                {
-                    std::copy(std::begin(m_slots[base & 0xFF].voices), std::end(m_slots[base & 0xFF].voices), s.voices);
-                }
-                auto data = std::make_shared<SoundData>();
-                data->channels = static_cast<uint32_t>(s.channels);
-                data->span = static_cast<uint32_t>(std::max(s.interleave, 1));
-                data->blocksPerChannel = static_cast<uint32_t>(s.rows) * data->span;
-                s.data = data;
-                const uint64_t bytes = static_cast<uint64_t>(s.rows) * s.channels * data->span * 16u;
-                m_loader.enqueue({data, m_libraryPath, m_library[s.entry].offset + 16ull, bytes});
-                setOpenReply(id);
-                NATIVE_AUDIO_TRACE("open stream %s as %d: %d ch, %d Hz, interleave 0x%x, %d rows, voices %d.. on core 0%s\n",
-                                   name, id, s.channels, s.rate, s.interleave, s.rows, s.voices[0],
-                                   share ? " (shared)" : "");
-                return 0;
-            }
-
-            // 0x1500 (0x4C064): a sound loaded whole into its voices' memory.
-            uint32_t openLocal(const char *name, int32_t loop)
-            {
-                const int32_t id = freeSlot();
-                if (id < 0)
-                    return 1;
-                Slot &s = m_slots[id];
-                s.core = 1;
-                s.shareBase = -1;
-                if (!lookup(s, name))
-                {
-                    std::fprintf(stderr, "[sound] could not find %s in the library\n", name);
-                    return 1;
-                }
-                if (!readHeader(s))
-                {
-                    std::fprintf(stderr, "[sound] sound %s: bad header\n", name);
-                    return 1;
-                }
-                s.kind = 3;
-                if (!deriveSizes(id, false))
-                    return 1;
-                for (int32_t c = 0; c < s.channels; ++c)
-                {
-                    const int32_t v = allocVoice(s.core, s.pitch);
-                    if (v < 0)
-                    {
-                        std::fprintf(stderr, "[sound] FATAL: no free voice for sound %s\n", name);
-                        return 1;
-                    }
-                    s.voices[c] = v;
-                }
-
-                // Each channel's rows go to its voice's memory one after the other, with the loop
-                // flags MSTREAM writes over the first and last blocks of rows.
-                const uint32_t span = static_cast<uint32_t>(std::max(s.interleave, 1));
-                const uint32_t rowBytes = span * 16u;
-                const uint32_t rows = static_cast<uint32_t>(std::max(s.rows, 0));
-                std::vector<uint8_t> file;
-                const uint64_t total = static_cast<uint64_t>(rows) * s.channels * rowBytes;
-                (void)Loader::readRange(m_libraryPath, m_library[s.entry].offset + 16ull, total, file);
-                file.resize(static_cast<size_t>(total), 0u);
-                auto data = std::make_shared<SoundData>();
-                data->channels = static_cast<uint32_t>(s.channels);
-                data->span = rows * span;
-                data->blocksPerChannel = rows * span;
-                data->bytes.resize(static_cast<size_t>(total));
-                for (uint32_t r = 0; r < rows; ++r)
-                {
-                    for (uint32_t c = 0; c < static_cast<uint32_t>(s.channels); ++c)
-                    {
-                        uint8_t *row = data->bytes.data() + (static_cast<size_t>(c) * rows + r) * rowBytes;
-                        std::memcpy(row, file.data() + (static_cast<size_t>(r) * s.channels + c) * rowBytes, rowBytes);
-                        if (rowBytes < 0x20u)
-                            continue;
-                        uint8_t &first = row[1], &second = row[0x11], &last = row[rowBytes - 0xF];
-                        if (rows == 1u)
-                        {
-                            second = 2;
-                            first = 6;
-                            last = loop ? 3 : 7;
-                        }
-                        else
-                        {
-                            if (r == 0u)
-                            {
-                                second = 2;
-                                first = 6;
-                                last = 2;
-                            }
-                            if (loop && r == rows - 1u)
-                            {
-                                second = 2;
-                                first = 2;
-                                last = 3;
-                            }
-                        }
-                    }
-                }
-                data->ready.store(true);
-                s.data = data;
-                setOpenReply(id);
-                NATIVE_AUDIO_TRACE("open sound %s as %d: %d ch, %d Hz, %u blocks, voices %d.. on core 1%s\n", name, id,
-                                   s.channels, s.rate, rows * span, s.voices[0], loop ? ", looped" : "");
-                return 0;
-            }
-
-            // 0x0A00 (0x4D694).
-            void stopSlot(int32_t id)
-            {
-                Slot &s = m_slots[id & 0xFF];
-                keyOff(s.core, voiceMask(s));
-                if ((s.kind == 1 || s.kind == 4) && s.status != 0)
-                {
-                    m_clockRunning = false;
-                    removeRun(id & 0xFF);
-                    s.status = 0;
-                }
-            }
-
-            // 0x1F00 (0x4C90C).
-            void closeSlot(int32_t id)
-            {
-                Slot &s = m_slots[id & 0xFF];
-                if (s.kind == 0)
-                    return;
-                if (s.shareBase == id || s.shareBase == -1)
-                {
-                    stopSlot(id);
-                    for (int32_t c = 0; c < s.channels && c < 8; ++c)
-                        record(s.core, s.voices[c]).used = false;
-                }
-                s.entry = 0;
-                s.length = 0;
-                s.kind = 0;
-                s.data.reset();
-            }
-
-            // 0x0800 (0x4D4AC).
-            void play(int32_t id, uint32_t streaming, uint32_t resetClock, uint32_t signal)
-            {
-                Slot &s = m_slots[id & 0xFF];
-                if (signal)
-                    ++m_eventSignals;
-                if (streaming)
-                {
-                    m_clockRunning = true;
-                    removeRun(id & 0xFF);
-                    Run run;
-                    run.slot = id & 0xFF;
-                    run.span = static_cast<uint32_t>(std::max(s.interleave, 0));
-                    run.limit = s.rows - (s.channels && s.interleave ? (s.consumed / s.channels) / s.interleave : 0);
-                    m_runs.push_back(run);
-                }
-                if (resetClock)
-                {
-                    m_queueRead = m_queueWrite = 0;
-                    m_clock = 0;
-                }
-                for (int32_t c = 0; c < s.channels && c < 8; ++c)
-                {
-                    Voice &v = voice(s.core, s.voices[c]);
-                    v.data = s.data;
-                    v.channel = static_cast<uint32_t>(c);
-                }
-                keyOn(s.core, voiceMask(s));
-                s.status = 1;
-                NATIVE_AUDIO_TRACE("play %d (kind %d)%s%s\n", id, s.kind, streaming ? " streaming" : "",
-                                   resetClock ? ", clock reset" : "");
-            }
-
-            // 0x2000 and the event thread (0x4C7C4): read a stream's start and, with `upload`, put it
-            // in its voices' buffers. Only MSTREAM's IOP buffer count survives of this (+0x7C, which
-            // decides how many refill rounds the stream gets).
-            void preload(int32_t id, uint32_t upload)
-            {
-                Slot &s = m_slots[id & 0xFF];
-                s.consumed = 0;
-                if (s.kind == 1 && s.data && upload)
-                {
-                    // MSTREAM reads the start before replying; here the whole stream is loading.
-                    const std::shared_ptr<SoundData> data = s.data;
-                    m_mutex.unlock();
-                    m_loader.wait(data);
-                    m_mutex.lock();
-                    // Two buffers uploaded; with two IOP buffers (interleave >= 0x300) the second
-                    // upload empties the first IOP buffer and the count starts again.
-                    s.consumed = s.interleave >= 0x300 ? 0 : 2 * s.channels * s.interleave;
-                }
-            }
-
-            // The event thread (0x4DCF4), one wake-up per signal.
-            void eventThread()
-            {
-                if (m_queueRead < m_queueWrite)
-                {
-                    const QueueEntry &e = m_queue[m_queueRead % kQueueEntries];
-                    m_eventSlot = static_cast<int32_t>(e.stream & 0xFF);
-                    m_eventPos = e.position;
-                    NATIVE_AUDIO_TRACE("next section: stream %u at block %u\n", e.stream, e.position);
-                    preload(static_cast<int32_t>(e.stream), 0);
-                    ++m_queueRead;
-                }
-                else if (m_queueRead == m_queueWrite)
-                {
-                    m_eventPos = 0xFFFFFFFFu;
-                }
-            }
-
-            void resetClockState() // 0x4DA04
-            {
-                m_clock = 0;
-                m_eventPos = 0xFFFFFFFFu;
-                m_clockRunning = false;
-            }
-
-            void init() // 0x0100
-            {
-                m_movie.playing = false; // the driver's init resets the sound hardware
-                setMasterVolume(m_masterVolume);
-                for (int32_t core = 0; core < 2; ++core)
-                    for (int32_t i = 0; i < kVoices; ++i)
-                        m_records[core][i].used = false;
-                // The init clears 0xC0 bytes of the volume records: core 0's first 16 voices.
-                for (int32_t i = 0; i < 16; ++i)
-                {
-                    m_records[0][i].volume = m_records[0][i].pan = 0;
-                    m_records[0][i].mute = 0;
-                }
-                for (Slot &s : m_slots)
-                    s = Slot{};
-                m_library = {};
-                m_preloadBusy = 0;
-                m_runs.clear();
-                m_threads = true;
-                resetClockState();
-                m_queueRead = m_queueWrite = 0;
-            }
-
-            void sleep() // 0x0E00
-            {
-                m_threads = false;
-                m_runs.clear();
-                for (Slot &s : m_slots)
-                    s = Slot{};
-                m_library = {};
-            }
-
-            bool openLibrary(PS2Runtime &runtime, const std::array<uint8_t, 64> &raw) // 0x1A00 (0x4B138)
-            {
-                std::string path(reinterpret_cast<const char *>(raw.data()), strnlen(reinterpret_cast<const char *>(raw.data()), raw.size()));
-                const PS2Runtime::IoPaths &paths = PS2Runtime::getIoPaths();
-                std::filesystem::path host;
-                if (!runtime.vfs().resolveHostPath(path, {paths.hostRoot, paths.cdRoot, paths.mcRoot}, host))
-                {
-                    std::fprintf(stderr, "[sound] cannot resolve library %s\n", path.c_str());
-                    return false;
-                }
+                std::lock_guard<std::mutex> lock(m_mutex);
                 std::vector<uint8_t> head;
-                if (!Loader::readRange(host.string(), 0, 4, head) || head.size() < 4)
+                if (!Loader::readRange(path, 0, 4, head) || head.size() < 4)
                 {
-                    std::fprintf(stderr, "[sound] cannot read library %s\n", host.string().c_str());
+                    std::fprintf(stderr, "[sound] cannot read library %s\n", path.c_str());
                     return false;
                 }
-                m_libraryPath = host.string();
-                m_libraryCount = static_cast<int32_t>(readU32(head.data()));
+                m_libraryPath = path;
+                m_libraryCount = std::clamp(static_cast<int>(readU32(head.data())), 0, kLibraryEntries);
                 std::vector<uint8_t> table;
-                const uint32_t count = static_cast<uint32_t>(std::clamp(m_libraryCount, 0, kLibraryEntries));
-                (void)Loader::readRange(m_libraryPath, 4, count * 32ull, table);
-                table.resize(count * 32u, 0u);
-                for (uint32_t i = 0; i < count; ++i)
+                (void)Loader::readRange(m_libraryPath, 4, m_libraryCount * 32ull, table);
+                table.resize(static_cast<size_t>(m_libraryCount) * 32u, 0u);
+                for (int i = 0; i < m_libraryCount; ++i)
                 {
                     LibraryEntry &e = m_library[i];
-                    const uint8_t *p = table.data() + i * 32u;
-                    // The name is upper-cased over its first 8 bytes; byte 8 is the 8-character
-                    // names' terminator.
-                    for (uint32_t k = 0; k < 8; ++k)
+                    const uint8_t *p = table.data() + static_cast<size_t>(i) * 32u;
+                    for (int k = 0; k < 8; ++k)
                         e.name[k] = static_cast<char>(std::toupper(p[k]));
                     e.name[8] = '\0';
                     e.offset = readU32(p + 0x10);
-                    e.kind = readU32(p + 0x1C);
                 }
-                NATIVE_AUDIO_TRACE("library %s: %d entries\n", path.c_str(), m_libraryCount);
+                SOUND_TRACE("library %s: %d entries\n", path.c_str(), m_libraryCount);
                 return true;
             }
 
-            void mstream(PS2Runtime &runtime, uint32_t fno, const std::array<uint32_t, 16> &a, const std::array<uint8_t, 64> &raw)
+        private:
+
+            // Opens a library entry. `shareWith` >= 0 plays it on that stream's channels.
+            bool open(const char *name, bool wholeSound, bool loop, int shareWith, std::array<uint32_t, 4> &answer)
             {
-                const uint32_t cmd = fno & 0xFFFFFF00u;
-                const int32_t id = static_cast<int32_t>(a[0]);
-                const auto name = [&]() -> std::string
-                { return std::string(reinterpret_cast<const char *>(raw.data()), strnlen(reinterpret_cast<const char *>(raw.data()), 0x3E)); };
-                const auto shareFlag = static_cast<int32_t>(static_cast<int8_t>(raw[0x3E]));
-                const auto shareBase = static_cast<int32_t>(static_cast<int8_t>(raw[0x3F]));
-                switch (cmd)
+                const int id = freeStream();
+                const LibraryEntry *entry = lookup(name);
+                if (id < 0 || !entry)
                 {
-                case 0xF100:
-                    break;
-                case 0x5C00:
-                    m_queueRead = m_queueWrite = 0;
-                    m_reply[0] = cmd; // the void call leaves v0 = the command
-                    break;
-                case 0x5B00:
-                    m_stereo = a[0] != 0;
-                    break;
-                case 0x5800:
-                    m_queue[m_queueWrite % kQueueEntries] = {a[0], a[1], a[2]};
-                    ++m_queueWrite;
-                    if (a[3])
-                        ++m_eventSignals;
-                    break;
-                case 0x5300:
-                    if (id < kSlots)
-                        setMute(m_slots[id].core, m_slots[id].voices[a[1] & 7], static_cast<int32_t>(a[2]));
-                    break;
-                case 0x5200:
-                    if (id < kSlots)
-                        setPan(m_slots[id].core, m_slots[id].voices[a[1] & 7], static_cast<uint16_t>(a[2]), true);
-                    break;
-                case 0x5100:
-                    if (id < kSlots)
-                        setVolume(m_slots[id].core, m_slots[id].voices[a[1] & 7], static_cast<uint16_t>(a[2]), true);
-                    break;
-                case 0x5A00:
-                    setMasterVolume(static_cast<uint16_t>(a[0]));
-                    break;
-                case 0x0800:
-                    if (id < kSlots)
-                        play(id, a[1], a[2], a[3]);
-                    break;
-                case 0x5600:
-                    m_reply[0] = m_clock;
-                    break;
-                case 0x2200:
-                    m_reply[0] = m_preloadBusy;
-                    break;
-                case 0x2000:
-                    m_slots[id & 0xFF].preloading = 1;
-                    preload(id, a[2]);
-                    m_slots[id & 0xFF].preloading = 0;
-                    m_reply[0] = 0;
-                    break;
-                case 0x2100:
-                    m_slots[id & 0xFF].preloading = 1;
-                    m_reply[0] = 1; // queued for MSTREAM's command thread, which preloads at once here
-                    preload(id, a[2]);
-                    m_slots[id & 0xFF].preloading = 0;
-                    m_preloadBusy = 0;
-                    break;
-                case 0x0900:
-                    m_reply[0] = static_cast<uint32_t>(m_slots[id & 0xFF].status);
-                    break;
-                case 0x0A00:
-                    stopSlot(id);
-                    break;
-                case 0x1F00:
-                    closeSlot(id);
-                    break;
-                case 0x0D00:
-                    for (int32_t i = kSlots - 1; i >= 0; --i)
-                        closeSlot(i);
-                    break;
-                case 0x1B00:
-                    for (int32_t i = kSlots - 1; i >= 0; --i)
-                        closeSlot(i);
-                    m_reply[0] = 0;
-                    break;
-                case 0x1A00:
-                    m_reply[0] = openLibrary(runtime, raw) ? 0u : 1u;
-                    break;
-                case 0x1500:
-                case 0x1400:
-                {
-                    const std::string n = name();
-                    m_reply[0] = cmd == 0x1400 ? openStream(n.c_str(), shareFlag, shareBase) : openLocal(n.c_str(), shareBase);
-                    m_reply[1] = m_lastChannels;
-                    m_reply[2] = m_lastRate;
-                    m_reply[3] = m_lastId;
-                    break;
+                    std::fprintf(stderr, "[sound] cannot open %s\n", name);
+                    answer[0] = 1;
+                    return false;
                 }
-                case 0x1000:
-                case 0x1100:
-                case 0x1300:
-                    std::fprintf(stderr, "[sound] MSTREAM open 0x%x (by path or from EE memory) is not supported\n", cmd);
-                    m_reply[0] = 1;
-                    break;
-                case 0x5700:
+                std::vector<uint8_t> header;
+                if (!Loader::readRange(m_libraryPath, entry->offset, 16u, header) || header.size() < 16u ||
+                    readU32(header.data()) < 1u || readU32(header.data()) > static_cast<uint32_t>(kMaxChannels))
                 {
-                    const Slot &s = m_slots[id & 0xFF];
-                    m_clockCore = s.core;
-                    m_clockVoice = s.voices[0];
-                    resetClockState();
-                    m_reply[0] = 0;
-                    break;
+                    std::fprintf(stderr, "[sound] %s: bad header\n", name);
+                    answer[0] = 1;
+                    return false;
                 }
-                case 0x3200:
-                    m_threads = false;
-                    break;
-                case 0x3100:
-                    m_threads = true;
-                    resetClockState();
-                    break;
-                case 0x0E00:
-                    sleep();
-                    break;
-                case 0x0100:
-                    init();
-                    break;
-                default:
-                    std::fprintf(stderr, "[sound] MSTREAM command 0x%x not handled\n", cmd);
-                    m_reply[0] = 1;
-                    break;
-                }
-                // The event thread runs once the RPC thread has replied.
-                while (m_eventSignals > 0)
+                Stream s;
+                s.open = true;
+                s.wholeSound = wholeSound;
+                s.loop = loop;
+                s.channels = static_cast<int>(readU32(header.data()));
+                s.rate = static_cast<int>(readU32(header.data() + 4));
+                s.interleave = std::max(static_cast<int>(readU32(header.data() + 8)), 1);
+                s.rows = static_cast<int>(readU32(header.data() + 12)) / s.channels;
+                if (shareWith >= 0 && stream(static_cast<uint32_t>(shareWith)))
+                    s.group = m_streams[shareWith].group;
+                else
                 {
-                    --m_eventSignals;
-                    eventThread();
+                    s.group = std::make_shared<Group>();
+                    s.group->count = s.channels;
+                    s.ownsGroup = true;
+                    m_groups.push_back(s.group);
+                }
+                auto data = std::make_shared<SoundData>();
+                data->channels = static_cast<uint32_t>(s.channels);
+                data->span = static_cast<uint32_t>(s.interleave);
+                data->blocksPerChannel = static_cast<uint32_t>(s.rows) * data->span;
+                s.data = data;
+                const uint64_t bytes = static_cast<uint64_t>(s.rows) * s.channels * data->span * 16u;
+                if (wholeSound)
+                {
+                    if (Loader::readRange(m_libraryPath, entry->offset + 16ull, bytes, data->bytes))
+                        data->ready.store(true, std::memory_order_release);
+                }
+                else
+                {
+                    m_loader.enqueue({data, m_libraryPath, entry->offset + 16ull, bytes});
+                }
+                answer = {0u, static_cast<uint32_t>(s.channels), static_cast<uint32_t>(s.rate), static_cast<uint32_t>(id)};
+                m_streams[id] = std::move(s);
+                SOUND_TRACE("open %s as %d: %d ch, %d Hz, %d rows%s\n", name, id, m_streams[id].channels, m_streams[id].rate,
+                            m_streams[id].rows, shareWith >= 0 ? ", shared channels" : "");
+                return true;
+            }
+
+            void stopGroup(Group &group)
+            {
+                for (int c = 0; c < group.count; ++c)
+                {
+                    Voice &v = group.channels[c].voice;
+                    v.playing = false;
+                    v.sounding = false;
+                    v.next.reset();
+                    v.switchAt = UINT64_MAX;
                 }
             }
 
-            struct QueueEntry
+            void forgetStreaming(int id)
             {
-                uint32_t stream = 0, position = 0, flag = 0;
+                m_streaming.erase(std::remove(m_streaming.begin(), m_streaming.end(), id), m_streaming.end());
+                if (m_music == id)
+                {
+                    m_music = -1;
+                    m_change = SectionChange{};
+                }
+            }
+
+            void stop(uint32_t id)
+            {
+                Stream *s = stream(id);
+                if (!s)
+                    return;
+                stopGroup(*s->group);
+                if (!s->wholeSound && s->playing)
+                {
+                    m_clockRunning = false;
+                    s->playing = false;
+                    forgetStreaming(static_cast<int>(id));
+                }
+            }
+
+            void close(uint32_t id)
+            {
+                Stream *s = stream(id);
+                if (!s)
+                    return;
+                if (s->ownsGroup)
+                {
+                    stop(id);
+                    m_groups.erase(std::remove(m_groups.begin(), m_groups.end(), s->group), m_groups.end());
+                }
+                forgetStreaming(static_cast<int>(id));
+                *s = Stream{};
+            }
+
+            void closeAll()
+            {
+                for (int i = kMaxStreams - 1; i >= 0; --i)
+                    close(static_cast<uint32_t>(i));
+            }
+
+            void play(uint32_t id, bool streaming, bool resetClock)
+            {
+                Stream *s = stream(id);
+                if (!s)
+                    return;
+                if (streaming)
+                {
+                    m_clockRunning = true;
+                    forgetStreaming(static_cast<int>(id));
+                    m_streaming.push_back(static_cast<int>(id));
+                    m_music = static_cast<int>(id);
+                    m_musicStart = 0;
+                }
+                if (resetClock)
+                {
+                    m_change = SectionChange{};
+                    m_clock = 0;
+                }
+                const uint32_t step = static_cast<uint32_t>((static_cast<uint64_t>(s->rate) * 0x1000u + kOutputRate / 2u) / kOutputRate);
+                for (int c = 0; c < s->group->count; ++c)
+                {
+                    Voice &v = s->group->channels[c].voice;
+                    v = Voice{};
+                    v.playing = true;
+                    v.sounding = true;
+                    v.loop = s->loop;
+                    v.data = s->data;
+                    v.channel = static_cast<uint32_t>(c);
+                    v.step = std::min<uint32_t>(step, 0x3FFFu);
+                }
+                s->playing = true;
+                SOUND_TRACE("play %u%s%s\n", id, streaming ? " streaming" : "", resetClock ? ", clock reset" : "");
+            }
+
+            // Queues the next section of the playing song: from `position` blocks into the current
+            // section, its channels continue with the start of `id`.
+            void queueSection(uint32_t id, uint32_t position)
+            {
+                Stream *next = stream(id);
+                if (!next || m_music < 0)
+                    return;
+                m_change.to = static_cast<int>(id);
+                m_change.at = m_musicStart + position;
+                Group &group = *m_streams[m_music].group;
+                for (int c = 0; c < group.count; ++c)
+                {
+                    group.channels[c].voice.next = next->data;
+                    group.channels[c].voice.switchAt = m_change.at;
+                }
+                SOUND_TRACE("next section: stream %u at block %u\n", id, position);
+            }
+
+            void resetAll()
+            {
+                closeAll();
+                m_groups.clear();
+                m_change = SectionChange{};
+                m_clockGroup.reset();
+                m_clockRunning = false;
+                m_clock = 0;
+            }
+
+            void handle(uint32_t fno, const std::array<uint32_t, 4> &a, const std::array<uint8_t, 64> &raw,
+                        std::array<uint32_t, 4> &answer, std::unique_lock<std::mutex> &lock)
+            {
+                const auto text = [&]() { const auto *p = reinterpret_cast<const char *>(raw.data()); return std::string(p, std::find(p, p + 0x3E, '\0')); };
+                const bool share = raw[0x3E] != 0;
+                const int base = raw[0x3F];
+                const uint32_t command = fno & 0xFFFFFF00u;
+                switch (command)
+                {
+                case 0x0100: // start of a sound session
+                    resetAll();
+                    break;
+                case 0x0E00: // end of a sound session
+                    resetAll();
+                    break;
+                case 0x3100: // the driver's threads: nothing to do
+                case 0x3200:
+                case 0xF100:
+                    break;
+                case 0x1B00:
+                case 0x0D00:
+                    closeAll();
+                    break;
+                case 0x1400:
+                    open(text().c_str(), false, false, share ? base : -1, answer);
+                    break;
+                case 0x1500:
+                    open(text().c_str(), true, base != 0, -1, answer);
+                    break;
+                case 0x1F00:
+                    close(a[0]);
+                    break;
+                case 0x2000: // wait for a stream's data
+                case 0x2100:
+                    if (Stream *s = stream(a[0]); s && !s->wholeSound && a[2] != 0)
+                    {
+                        const std::shared_ptr<SoundData> data = s->data;
+                        lock.unlock();
+                        m_loader.wait(data);
+                        lock.lock();
+                    }
+                    answer[0] = command == 0x2100 ? 1u : 0u;
+                    break;
+                case 0x2200: // preload finished?
+                    break;
+                case 0x0800:
+                    play(a[0], a[1] != 0, a[2] != 0);
+                    break;
+                case 0x0900:
+                    answer[0] = a[0] < kMaxStreams && m_streams[a[0]].open && m_streams[a[0]].playing ? 1u : 0u;
+                    break;
+                case 0x0A00:
+                    stop(a[0]);
+                    break;
+                case 0x5100:
+                    if (Channel *c = channel(a[0], a[1]))
+                    {
+                        c->volume = static_cast<uint16_t>(a[2]);
+                        applyVolume(*c);
+                    }
+                    break;
+                case 0x5200:
+                    if (Channel *c = channel(a[0], a[1]))
+                    {
+                        c->pan = static_cast<uint16_t>(a[2]);
+                        applyVolume(*c);
+                    }
+                    break;
+                case 0x5600:
+                    answer[0] = m_clock;
+                    break;
+                case 0x5700: // which stream drives the song clock
+                    if (Stream *s = stream(a[0]))
+                        m_clockGroup = s->group;
+                    m_clock = 0;
+                    m_clockRunning = false;
+                    m_change = SectionChange{};
+                    break;
+                case 0x5800:
+                    queueSection(a[0], a[1]);
+                    break;
+                case 0x5C00:
+                    m_change = SectionChange{};
+                    break;
+                case 0x5A00:
+                    m_master = volumeGain(static_cast<uint16_t>(a[0] >> 1));
+                    break;
+                default:
+                    std::fprintf(stderr, "[sound] request 0x%x not handled\n", command);
+                    answer[0] = 1;
+                    break;
+                }
+            }
+
+            struct SectionChange
+            {
+                int to = -1;
+                uint64_t at = 0;
             };
 
             std::mutex m_mutex;
             Loader m_loader;
-            bool m_started = false;
             int64_t m_clockOffsetFrames = 0;
-            float m_master = 0.0f;
+            float m_master = volumeGain(0x3FFF);
 
-            std::array<std::array<Voice, kVoices>, 2> m_voices{};
-            Movie m_movie;
+            std::array<Stream, kMaxStreams> m_streams{};
+            std::vector<std::shared_ptr<Group>> m_groups;
+            std::vector<int> m_streaming; // streams playing out, to notice when they end
+            int m_music = -1;             // the stream section changes apply to
+            uint64_t m_musicStart = 0;    // block of its channels' position where it began
+            SectionChange m_change;
 
-            std::array<uint32_t, 4> m_reply{};
-            std::array<std::array<VoiceRecord, kVoices>, 2> m_records{};
-            std::array<Slot, kSlots> m_slots{};
             std::array<LibraryEntry, kLibraryEntries> m_library{};
-            int32_t m_libraryCount = 0;
+            int m_libraryCount = 0;
             std::string m_libraryPath;
-            uint32_t m_lastChannels = 0, m_lastRate = 0, m_lastId = 0;
-            uint32_t m_preloadBusy = 0;
-            bool m_stereo = true;
-            uint16_t m_masterVolume = 0x7FFF;
-            bool m_threads = false;
-            std::vector<Run> m_runs;
-            std::array<QueueEntry, kQueueEntries> m_queue{};
-            uint32_t m_queueRead = 0, m_queueWrite = 0;
-            uint32_t m_eventSignals = 0;
-            int32_t m_eventSlot = -1;
-            uint32_t m_eventPos = 0xFFFFFFFFu;
-            int32_t m_clockCore = 0, m_clockVoice = 0;
+
+            std::shared_ptr<Group> m_clockGroup;
             bool m_clockRunning = false;
             uint32_t m_clock = 0;
 
-            bool m_warnedUnloaded = false;
+            Movie m_movie;
         };
 
         Engine &engine()
@@ -1334,13 +907,15 @@ namespace port::sound
 
     void start() { engine().start(); }
 
-    void request(PS2Runtime &runtime, uint32_t fno, const uint8_t *send, uint32_t sendSize, uint8_t *reply)
+    void request(uint32_t fno, const uint8_t *send, uint32_t sendSize, uint8_t *reply)
     {
-        engine().request(runtime, fno, send, sendSize, reply);
+        engine().request(fno, send, sendSize, reply);
     }
 
+    bool openLibrary(const std::string &hostPath) { return engine().openLibrary(hostPath); }
+
     void latchSongClock() { engine().latchSongClock(); }
-    void setMaster(uint16_t volume) { engine().setMaster(volume); }
+    void setMovieVolume(uint16_t volume) { engine().setMovieVolume(volume); }
     void movieOpen(uint32_t bytes) { engine().movieOpen(bytes); }
     void moviePlay(bool playing) { engine().moviePlay(playing); }
     void movieClear() { engine().movieClear(); }
