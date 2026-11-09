@@ -35,8 +35,6 @@ set(GITAROO_PORT_SOURCES ${GITAROO_SHARED_SOURCES} ${GITAROO_NATIVE_SOURCES})
 # reaches the native one.
 set(GITAROO_NATIVE_FUNCTIONS
     # Sound (src/port/sound/game_functions.cpp)
-    _sceSifLoadModule_0x131410
-    sceSifBindRpc_0x12f870
     FUN_0023e690_0x23e690
     sceSdRemoteInit_0x1361e0
     sceSdRemote_0x136320
@@ -45,7 +43,20 @@ set(GITAROO_NATIVE_FUNCTIONS
     FUN_0023f4b0_0x23f4b0
     FUN_0023f540_0x23f540
     FUN_0023f3f0_0x23f3f0
-    FUN_0023eff0_0x23eff0)
+    FUN_0023eff0_0x23eff0
+    # The IOP (src/port/iop/game_functions.cpp)
+    FUN_00108e80_0x108e80
+    sceSifRebootIop_0x131af0
+    sceSifSyncIop_0x131aa8
+    sceSifInitRpc_0x12f1e0
+    sceSifInitIopHeap_0x130e20
+    sceSifLoadFileReset_0x1311e8
+    sceSifAllocIopHeap_0x130ea8
+    sceSifFreeIopHeap_0x130f18
+    sceSifBindRpc_0x12f870
+    sceMtapInit_0x135d38
+    sceMtapPortOpen_0x135fb8
+    sceMtapGetConnection_0x136098)
 foreach(GITAROO_NATIVE_FUNCTION IN LISTS GITAROO_NATIVE_FUNCTIONS)
     list(REMOVE_ITEM GITAROO_RECOMP_SOURCES "${GITAROO_RECOMP_DIR}/${GITAROO_NATIVE_FUNCTION}.cpp")
 endforeach()
