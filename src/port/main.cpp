@@ -2,6 +2,7 @@
 // the runtime starts the recompiled game.
 
 #include "sound/sound_engine.h"
+#include "render/render_engine.h"
 
 #include "ps2_runtime.h"
 #include "ps2x/iop/iop_audio.h"
@@ -58,6 +59,7 @@ int main(int argc, char *argv[])
         // Sound is native: the emulated sound chip, stepped while other IOP modules run, is unheard.
         ps2x::iop::setAudioSink(nullptr, nullptr);
         port::sound::start();
+        port::render::start();
         g_vblankHandler = runtime.lookupFunction(kVBlankHandler);
         runtime.replaceFunction(kVBlankHandler, &vblankHandler);
 

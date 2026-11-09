@@ -28,6 +28,10 @@ file(GLOB GITAROO_RECOMP_SOURCES CONFIGURE_DEPENDS "${GITAROO_RECOMP_DIR}/*.cpp"
 # src/*.cpp also goes into the reference build; src/port/ is the port's alone.
 file(GLOB GITAROO_SHARED_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 file(GLOB_RECURSE GITAROO_NATIVE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/port/*.cpp")
+list(APPEND GITAROO_NATIVE_SOURCES 
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/port/render/render_engine.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/port/render/opengl/renderer.cpp"
+)
 set(GITAROO_PORT_SOURCES ${GITAROO_SHARED_SOURCES} ${GITAROO_NATIVE_SOURCES})
 
 # Game functions defined natively in src/port/: the recompiled versions are left out of the port
@@ -62,7 +66,12 @@ foreach(GITAROO_NATIVE_FUNCTION IN LISTS GITAROO_NATIVE_FUNCTIONS)
 endforeach()
 
 add_executable(gitaroo-man ${GITAROO_RECOMP_SOURCES} ${GITAROO_PORT_SOURCES})
-target_include_directories(gitaroo-man PRIVATE "${GITAROO_RECOMP_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(gitaroo-man PRIVATE 
+    "${GITAROO_RECOMP_DIR}" 
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/port/render"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/port/render/opengl"
+)
 target_link_libraries(gitaroo-man PRIVATE ps2_runtime)
 
 # The generated code is huge and rarely changes: batch and precompile it as the stock runner does,
