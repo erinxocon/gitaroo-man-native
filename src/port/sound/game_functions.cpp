@@ -5,24 +5,19 @@
 
 #include "ps2_runtime.h"
 #include "ps2_runtime_macros.h"
-#include "ps2_stubs.h"
-#include "ps2_syscalls.h"
 #include "runtime/ee_scheduler.h"
 
 #include <ps2_recompiled_functions.h>
 #include <ps2_recompiled_stubs.h>
 
 #include <algorithm>
-#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <string>
 
 namespace
 {
-    constexpr uint32_t kMstreamSid = 0x1563u;
     constexpr uint32_t kMstreamClient = 0x0029D4C0u;
     constexpr uint32_t kMoviePlayerVolume = 0x002649BCu;
 
@@ -80,42 +75,6 @@ namespace
     {
         store32(rdram, ad + f * 4u, value);
     }
-}
-
-// ---------------------------------------------------------------------------------------------
-// The driver modules are not loaded; their server is not bound.
-// ---------------------------------------------------------------------------------------------
-
-void _sceSifLoadModule_0x131410(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-{
-    std::string path;
-    if (const char *p = reinterpret_cast<const char *>(getConstMemPtr(rdram, GPR_U32(ctx, 4))))
-        path = p;
-    std::transform(path.begin(), path.end(), path.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    for (const char *module : {"LIBSD.IRX", "SDRDRV.IRX", "MSTREAM.IRX"})
-    {
-        if (path.find(module) != std::string::npos)
-        {
-            static int32_t nextId = 0x7000;
-            returnValue(ctx, nextId++);
-            return;
-        }
-    }
-    ctx->pc = GPR_U32(ctx, 31);
-    ps2_syscalls::sceSifLoadModule(rdram, ctx, runtime);
-}
-
-void sceSifBindRpc_0x12f870(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
-{
-    if (GPR_U32(ctx, 5) == kMstreamSid)
-    {
-        // The game waits for the client's server pointer to be set.
-        store32(rdram, GPR_U32(ctx, 4) + 0x24u, 1u);
-        returnValue(ctx, 0);
-        return;
-    }
-    ctx->pc = GPR_U32(ctx, 31);
-    ps2_stubs::sceSifBindRpc(rdram, ctx, runtime);
 }
 
 // ---------------------------------------------------------------------------------------------

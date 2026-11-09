@@ -14,9 +14,12 @@ recompiled, or lifted. Judge work by whether it removes such a layer; say so pla
 only improves one. The emulated paths remain as the reference that native replacements are
 checked against (see "Prove replacements").
 
+The result should build for any platform, as plain C++ with thin platform backends (in the spirit
+of N64Recomp's native ports and the LEGO Island port): SSE and the like may end up in a binary, but
+because the compiler chose them.
+
 What is still emulation, in the order it is being replaced: sound is done (`src/port/sound/`,
-docs/native-audio.md); the IOP modules left (pad, memory card, multitap) -> host code, after which
-nothing runs on the IOP emulator; VU1 microprogram and the
+docs/native-audio.md) and nothing runs on the IOP emulator any more (`src/port/iop/`); VU1 microprogram and the
 GS -> rendering at the AIR.NGP render-context level; the EE scheduler's cycle accounting and the
 interpreter for runtime-generated draw loops.
 
@@ -32,10 +35,12 @@ interpreter for runtime-generated draw loops.
   or the generated VU1 file (`external/PS2Recomp/ps2xRuntime/src/lib/vu/generated/`). Only tooling,
   hand-written config, symbol/address tables, docs. Check `git status` before every commit.
 - **No AI attribution** in commits or PRs (no `Co-Authored-By`, no "Generated with" lines).
-- **Portable runtime code**: plain standard C++20; no intrinsics, inline asm or OS-specific APIs in
-  new runtime/generated code unless it is a real blocker (then say so). Dev/profiling scripts may be
-  platform-specific. Upstream PS2Recomp uses SSE types for EE registers (sse2neon covers ARM); leave
-  that as is.
+- **Portable code**: the port is meant to compile for any platform (Linux, phones, Switch; see Goal).
+  Write plain standard C++20 and let the compiler choose SIMD and other platform instructions: no
+  intrinsics, inline asm or OS-specific APIs in our code. Where one is needed for v1, mark it
+  `// PLATFORM-SPECIFIC:` with why, so it can be found and revisited. Dev/profiling scripts may be
+  platform-specific. The recompiler's SSE output is the known v1 exception, to be replaced with plain
+  C++ later. Design rendering, sound and host services behind thin backends with features phones have.
 - **Prove replacements**: anything that replaces interpreted/emulated behaviour needs a reference
   check (lockstep, PCSX2 capture, or before/after dumps). The emulated path stays available as `ps2EntryRunner`.
 - Commit messages: plain, imperative subject; body says why. History is time-ordered; group work in
@@ -84,7 +89,7 @@ interpreter for runtime-generated draw loops.
 
 ## IOP
 
-- The sound drivers (LIBSD, SDRDRV, MSTREAM) run as C++ from `tools/ioplift/ioplift.py`
+- Only `ps2EntryRunner` runs anything on the IOP. There, the sound drivers (LIBSD, SDRDRV, MSTREAM) run as C++ from `tools/ioplift/ioplift.py`
   (docs/iop-lifter.md); everything they import is HLE in ps2xIOP. After changing the lifter or the
   IOP interpreter's semantics, run `PS2X_IOP_LIFT_VERIFY=1` through `stage1_battle.txt` (must report
   0 mismatches) and once with `ioplift.py --break` (must report mismatches).
@@ -114,8 +119,9 @@ interpreter for runtime-generated draw loops.
 - The game assembles MIPS draw loops at runtime (AiCube vertex-array templates 0x1DA330..0x1DA550);
   the runtime's fallback EE interpreter runs them (`PS2X_NO_EE_INTERP=1` disables).
 - Movies: gmMovie (ezmpeg-derived) over an HLE MPEG decoder; audio goes through the game's PCM callback.
-- IOP modules run under the IOP emulator: SIO2MAN MTAPMAN MCMAN MCSERV PADMAN LIBSD SDRDRV MSTREAM.
-  MSTREAM timing depends on IOP vblank handlers.
+- The port loads no IOP modules (`GITAROO_TRACE_IOP=1` prints the emulator's counters, all zero);
+  `ps2EntryRunner` loads SIO2MAN MTAPMAN MCMAN MCSERV PADMAN LIBSD SDRDRV MSTREAM. Pad, memory card
+  and CD are host code in both. No multitap is reported in the port.
 - The game's libm is the double-precision build (soft doubles in a0/v0, MW helpers fptodp/dptofp):
   runtime handlers with libm names assume floats in f12/f0, so `ceil cos fabs floor` are forced
   `native`. Check the ABI before stubbing any other math function. Sony SDK functions take

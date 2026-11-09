@@ -5,6 +5,7 @@
 
 #include "ps2_runtime.h"
 #include "ps2x/iop/iop_audio.h"
+#include "ps2x/iop/iop_subsystem.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -21,6 +22,18 @@ namespace
     void vblankHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         port::sound::latchSongClock();
+        // GITAROO_TRACE_IOP=1: the IOP emulator's counters every 600 vblanks. All should stay zero.
+        static const bool s_traceIop = std::getenv("GITAROO_TRACE_IOP") != nullptr;
+        static uint32_t s_vblanks = 0;
+        if (s_traceIop && ++s_vblanks % 600u == 0u)
+        {
+            const ps2x::iop::DebugSnapshot iop = runtime->iopDebugSnapshot();
+            std::fprintf(stderr, "[iop] modules=%llu threads=%llu rpc-servers=%llu instructions=%llu\n",
+                         static_cast<unsigned long long>(iop.emulatorLoadedModules),
+                         static_cast<unsigned long long>(iop.emulatorThreads),
+                         static_cast<unsigned long long>(iop.emulatorRpcServers),
+                         static_cast<unsigned long long>(iop.emulatorInstructions));
+        }
         g_vblankHandler(rdram, ctx, runtime);
     }
 }
