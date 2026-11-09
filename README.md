@@ -24,14 +24,15 @@ your own disc, and the tools here produce everything else on your machine.
 Boots through the intro movies (video and audio), title screen and menus into the tutorial and the
 stage 1 battle, playable with keyboard or controller, with music and sound. The VU1 mesh renderer
 (transform, lighting, clip test) is native C++, the rest of the microprogram recompiled C++, both
-verified bit-for-bit against the interpreter over 10M+ runs. The IOP sound drivers run as C++
-compiled from their MIPS code, verified block by block against the IOP interpreter. Graphics are drawn with OpenGL at 2x
+verified bit-for-bit against the interpreter over 10M+ runs. Sound is native: the game's sound
+functions are served by host code that reads the music and effects from the disc's sound libraries
+and mixes them ([docs/native-audio.md](docs/native-audio.md)). Graphics are drawn with OpenGL at 2x
 (or more) internal resolution, verified frame by frame against the CPU rasterizer. The tutorial and
 the whole stage 1 battle run at a locked 60 fps. Optional 16:9 widescreen. Stages 2-10 start from a
 completed memory card save (`tools/run/stage.sh`) and run with both verifiers on: VU1 bit-exact on
 all of them (70-110M runs each), GPU frames matching the CPU rasterizer except a few effects listed
-in [docs/gpu-renderer.md](docs/gpu-renderer.md). Audio reaches the speakers about 50 ms after the
-game produces it ([docs/audio.md](docs/audio.md)). See [docs/](docs/) for details.
+in [docs/gpu-renderer.md](docs/gpu-renderer.md). The sound card drives the mix (about 15 ms from mix to
+speaker), so a slow game frame does not stall the music. See [docs/](docs/) for details.
 
 ## How it works
 
@@ -146,7 +147,8 @@ PS2X_MC_ROOT=build/saves/mc0 tools/run/stage.sh 5 st5 900 PS2X_VU1_VERIFY=1
 | `PS2X_ASPECT=W:H` | shape of the displayed picture (default 4:3; with `PS2X_WIDESCREEN=1` also pass `PS2X_ASPECT=16:9` so the window opens wide) |
 | `PS2X_WINDOW=WxH` | initial window size (default 960 lines in the display aspect) |
 | `PS2X_DEINTERLACE=0` | show raw fields instead of the weaver |
-| `PS2X_AUDIO_LATENCY_MS=N` | audio buffered ahead of the sound device (default 40; raise if it crackles) ([docs/audio.md](docs/audio.md)) |
+| `GITAROO_AUDIO_DUMP=<file.wav>`, `GITAROO_TRACE_SOUND=1`, `GITAROO_SONG_CLOCK_OFFSET_MS=N` | record the mix; print opens, plays, section and status changes; how far the song clock trails the mix (default: the device buffer) ([docs/native-audio.md](docs/native-audio.md)) |
+| `PS2X_AUDIO_LATENCY_MS=N` | on `ps2EntryRunner`: audio buffered ahead of the sound device (default 40; raise if it crackles) ([docs/audio.md](docs/audio.md)) |
 | `PS2X_AUDIO_PERIOD_MS=N`, `PS2X_AUDIO_RAYLIB=1` | sound device period (default 5 ms); play through raylib's shared device instead |
 | `PS2X_VU1_LIFT=0` | use the VU1 interpreter instead of the recompiled microprogram |
 | `PS2X_VU1_NATIVE=0` | run the mesh renderer (entry 0x1B68) as recompiled microcode instead of native C++ |
@@ -186,7 +188,8 @@ Ignored, local-only: `iso/` (your disc), `build/` (all generated output), `logs/
 - [docs/vu1-lifter.md](docs/vu1-lifter.md): VU1 census, comparison with Ace Combat 5, the lifter and its verification
 - [docs/vu1-renderer.md](docs/vu1-renderer.md): what the VU1 mesh renderer computes, and its native C++ replacement
 - [docs/gpu-renderer.md](docs/gpu-renderer.md): the OpenGL GS backend, upscaling and its verification
-- [docs/audio.md](docs/audio.md): the audio path, its latency budget and dropouts
+- [docs/native-audio.md](docs/native-audio.md): the game's sound requests, the IMC format and the native sound engine
+- [docs/audio.md](docs/audio.md): the emulated audio path (`ps2EntryRunner`), its latency budget and dropouts
 - [docs/pcsx2-reference.md](docs/pcsx2-reference.md): using PCSX2 as ground truth
 - [docs/research/persona4-decomp.md](docs/research/persona4-decomp.md): lessons from the Persona 4 decompilation (same compiler family)
 
