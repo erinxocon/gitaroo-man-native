@@ -26,9 +26,29 @@ add_subdirectory(external/PS2Recomp external EXCLUDE_FROM_ALL)
 
 file(GLOB GITAROO_RECOMP_SOURCES CONFIGURE_DEPENDS "${GITAROO_RECOMP_DIR}/*.cpp")
 # src/*.cpp also goes into the reference build; src/port/ is the port's alone.
-file(GLOB GITAROO_PORT_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/port/*.cpp")
+file(GLOB GITAROO_SHARED_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+file(GLOB_RECURSE GITAROO_NATIVE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/port/*.cpp")
+set(GITAROO_PORT_SOURCES ${GITAROO_SHARED_SOURCES} ${GITAROO_NATIVE_SOURCES})
+
+# Game functions defined natively in src/port/: the recompiled versions are left out of the port
+# (they stay in the reference build), so every call to them, direct or through the function table,
+# reaches the native one.
+set(GITAROO_NATIVE_FUNCTIONS
+    # Sound (src/port/sound/game_functions.cpp)
+    _sceSifLoadModule_0x131410
+    sceSifBindRpc_0x12f870
+    FUN_0023e690_0x23e690
+    sceSdRemoteInit_0x1361e0
+    sceSdRemote_0x136320
+    FUN_0023f660_0x23f660
+    FUN_0023f5e0_0x23f5e0
+    FUN_0023f4b0_0x23f4b0
+    FUN_0023f540_0x23f540
+    FUN_0023f3f0_0x23f3f0
+    FUN_0023eff0_0x23eff0)
+foreach(GITAROO_NATIVE_FUNCTION IN LISTS GITAROO_NATIVE_FUNCTIONS)
+    list(REMOVE_ITEM GITAROO_RECOMP_SOURCES "${GITAROO_RECOMP_DIR}/${GITAROO_NATIVE_FUNCTION}.cpp")
+endforeach()
 
 add_executable(gitaroo-man ${GITAROO_RECOMP_SOURCES} ${GITAROO_PORT_SOURCES})
 target_include_directories(gitaroo-man PRIVATE "${GITAROO_RECOMP_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src")

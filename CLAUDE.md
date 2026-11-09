@@ -14,9 +14,9 @@ recompiled, or lifted. Judge work by whether it removes such a layer; say so pla
 only improves one. The emulated paths remain as the reference that native replacements are
 checked against (see "Prove replacements").
 
-What is still emulation, in the order it is being replaced: sound (IOP emulator, lifted SDRDRV/
-MSTREAM/LIBSD, the SPU2 model) -> a native audio engine serving the game's sound RPCs; CD, memory
-card and pad modules -> host services, after which the IOP emulator goes; VU1 microprogram and the
+What is still emulation, in the order it is being replaced: sound is done (`src/port/sound/`,
+docs/native-audio.md); the IOP modules left (pad, memory card, multitap) -> host code, after which
+nothing runs on the IOP emulator; VU1 microprogram and the
 GS -> rendering at the AIR.NGP render-context level; the EE scheduler's cycle accounting and the
 interpreter for runtime-generated draw loops.
 
@@ -37,7 +37,7 @@ interpreter for runtime-generated draw loops.
   platform-specific. Upstream PS2Recomp uses SSE types for EE registers (sse2neon covers ARM); leave
   that as is.
 - **Prove replacements**: anything that replaces interpreted/emulated behaviour needs a reference
-  check (lockstep, PCSX2 capture, or before/after dumps). Keep the old path available behind an env var.
+  check (lockstep, PCSX2 capture, or before/after dumps). The emulated path stays available as `ps2EntryRunner`.
 - Commit messages: plain, imperative subject; body says why. History is time-ordered; group work in
   theme branches merged with `--no-ff`.
 
@@ -52,6 +52,10 @@ interpreter for runtime-generated draw loops.
 - `config/gitaroo.toml` drives the recompiler (`stubs`, `native` = force original code even when a
   runtime handler has the same name). `config/symbols/*.txt` are `name address` lines applied to
   Ghidra by `tools/ghidra/export.sh`.
+- Native code replaces a game function by defining it: add the recompiled file's name to
+  `GITAROO_NATIVE_FUNCTIONS` in `CMakeLists.txt` and define the same symbol in `src/port/`. Prefer
+  this to `replaceFunction`, which only catches calls through the function table (tail jumps compile
+  to direct calls); `replaceFunction` is for interrupt handlers and the like.
 - `src/gitaroo_overrides.cpp`: per-address function overrides that keep the game running on the
   runtime (both builds). Keep them minimal and document why the original code cannot run.
 - Build: `tools/build/recomp.sh` (recompile + build), or `ninja -C build/game` after editing `src/`.
@@ -95,7 +99,9 @@ interpreter for runtime-generated draw loops.
 
 ## Audio
 
-- The IOP (and the SPU2) only advances while the game thread accounts EE cycles, so anything that
+- Sound is native in the port (docs/native-audio.md); after changing `src/port/sound/`, compare the
+  stage 1 script and a boot with movies against `ps2EntryRunner` as described there.
+- On the reference runner: the IOP (and the SPU2) only advances while the game thread accounts EE cycles, so anything that
   blocks the game thread -- or the GS host thread long enough to fill its queue -- is an audio
   dropout. Keep slow work (PNG encoding, file writes) off both; `PS2X_TRACE_STALLS=1` finds stalls.
 - Output latency matters (rhythm game): `PS2X_TRACE_AUDIO_LATENCY=1` should show ~30-40 ms buffered
