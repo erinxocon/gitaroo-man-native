@@ -7,8 +7,8 @@ raylib's GL 3.3 context) instead of the multithreaded CPU rasterizer. It lives i
 It is the default renderer:
 
 ```sh
-PS2X_GS_SCALE=3 build/runtime/ps2xRuntime/ps2EntryRunner iso/SLUS_202.94   # 3x internal resolution
-PS2X_GS_BACKEND=cpu build/runtime/ps2xRuntime/ps2EntryRunner iso/SLUS_202.94  # CPU rasterizer
+PS2X_GS_SCALE=3 build/game/gitaroo-man iso/SLUS_202.94   # 3x internal resolution
+PS2X_GS_BACKEND=cpu build/game/gitaroo-man iso/SLUS_202.94  # CPU rasterizer
 ```
 
 | variable | effect |

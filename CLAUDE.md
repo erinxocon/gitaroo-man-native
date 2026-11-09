@@ -22,6 +22,11 @@ interpreter for runtime-generated draw loops.
 
 ## Hard rules
 
+- **Do not change the PS2Recomp runtime for the port** (`external/PS2Recomp`; frozen). It is the
+  emulation layer: it keeps running whatever has not been replaced yet, and its non-emulation services
+  (window/GL, audio output, files, input, `replaceFunction`) may be used, but native work never goes
+  into it, not even a small hook. Native code lives in this repo (`src/port/`) and replaces the
+  game's own functions. If something truly cannot be done that way, stop and ask.
 - **Never commit game material**: no ISO/ELF/IRX/BIOS/save files, memory or VRAM dumps, screenshots,
   PCSX2 captures, recompiled code (`build/recomp`), Ghidra projects/exports (`build/functions.csv`),
   or the generated VU1 file (`external/PS2Recomp/ps2xRuntime/src/lib/vu/generated/`). Only tooling,
@@ -38,24 +43,25 @@ interpreter for runtime-generated draw loops.
 
 ## Layout and workflow
 
-- `external/PS2Recomp` is a submodule (fork `erinxocon/PS2Recomp`, branch `gitaroo-native`). Runtime
-  or recompiler changes are committed **inside the submodule** on that branch and pushed, then the
-  pointer is bumped in this repo. Keep upstream-worthy fixes separable (one topic per commit).
+- The top-level `CMakeLists.txt` builds the port, `build/game/gitaroo-man`: the recompiled game, our
+  code and our `main()` (`src/port/main.cpp`), with the runtime linked as a library.
+  `ninja -C build/game ps2EntryRunner` builds the emulated reference (`src/*.cpp` go in both builds,
+  `src/port/` only in the port).
+- `external/PS2Recomp` is a submodule (fork `erinxocon/PS2Recomp`, branch `gitaroo-native`), frozen
+  (see Hard rules).
 - `config/gitaroo.toml` drives the recompiler (`stubs`, `native` = force original code even when a
   runtime handler has the same name). `config/symbols/*.txt` are `name address` lines applied to
   Ghidra by `tools/ghidra/export.sh`.
-- `src/gitaroo_overrides.cpp`: per-address function overrides compiled into the runner. Keep them
-  minimal and document why the original code cannot run.
-- Build: `tools/build/recomp.sh` (recompile + build), or `ninja -C build/runtime` after runtime-only
-  edits. Editing headers under `external/PS2Recomp/ps2xRuntime/include` rebuilds everything (PCH,
-  ~4 min); prefer .cpp-local changes.
+- `src/gitaroo_overrides.cpp`: per-address function overrides that keep the game running on the
+  runtime (both builds). Keep them minimal and document why the original code cannot run.
+- Build: `tools/build/recomp.sh` (recompile + build), or `ninja -C build/game` after editing `src/`.
 - Test runs: `tools/run/run.sh <name> <secs> VAR=...` (log in `logs/`, frames in `build/runs/<name>/`).
   Use scripted input (`tools/run/inputs/*.txt`, e.g. `stage1_battle.txt` reaches the stage 1 battle
   and the loss screen in ~900 s with movies skipped). Look at the dumped frames to check rendering.
 - Later stages: `tools/run/stage.sh <N> <name> <secs>` with `PS2X_MC_ROOT` pointing at a card
   directory holding a completed save (the user's PCSX2 save; never commit it). Menus can be driven
   live with `PS2X_INPUT_LIVE=<file>` plus `PS2X_DUMP_FRAMES`.
-- Speed: `tools/run/bench.sh <name>` prints fps per 2 s window; `perf record -p $(pgrep -x ps2EntryRunner)`.
+- Speed: `tools/run/bench.sh <name>` prints fps per 2 s window; `perf record -p $(pgrep -x gitaroo-man)`.
 
 ## VU1
 

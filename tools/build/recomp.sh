@@ -1,6 +1,6 @@
 #!/bin/bash
 # Regenerates C++ from the game ELF using config/gitaroo.toml (paths in it are relative to the repo
-# root and made absolute here), then rebuilds the runner.
+# root and made absolute here), then rebuilds the game.
 # Output is generated into a scratch dir and synced by content, so stale files are removed and
 # unchanged files keep their timestamps (only changed translation units rebuild).
 set -euo pipefail
@@ -16,5 +16,5 @@ sed -e "s#^input = \"#input = \"$ROOT/#" \
 tail -1 logs/recomp.log
 rsync -a --checksum --delete build/recomp.new/ build/recomp/
 rm -rf build/recomp.new
-ninja -C build/runtime -j"$(nproc)" ps2EntryRunner > logs/build_runtime.log 2>&1 || { grep -m20 'error' logs/build_runtime.log; exit 1; }
-tail -1 logs/build_runtime.log
+ninja -C build/game -j"$(nproc)" gitaroo-man > logs/build_game.log 2>&1 || { grep -m20 'error' logs/build_game.log; exit 1; }
+tail -1 logs/build_game.log

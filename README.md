@@ -43,7 +43,7 @@ your disc ──► iso/SLUS_202.94 ──► Ghidra (function list) ──► p
    external/PS2Recomp/ps2xRuntime (EE kernel HLE, IOP emulator, VIF/GIF/GS, VU1, SPU2, MPEG) + src/
                                                                                    │
                                                                                    ▼
-                                                                 build/runtime/.../ps2EntryRunner
+                                                                 build/game/gitaroo-man
 ```
 
 - **[external/PS2Recomp](https://github.com/erinxocon/PS2Recomp)** (git submodule, branch
@@ -79,21 +79,22 @@ tools/ghidra/import.sh                                   # one-time Ghidra proje
 tools/ghidra/export.sh                                   # apply config/symbols, export build/functions.csv
 python3 tools/vu1lift/vu1lift.py                         # optional: recompiled VU1 microprogram
 python3 tools/ioplift/ioplift.py                         # optional: IOP sound drivers as C++
-tools/build/recomp.sh                                    # recompile the game and build the runner
+tools/build/recomp.sh                                    # recompile the game and build it
 ```
 
 On x86-64 the build targets your own CPU (`-march=native`); for binaries that run on other
 machines use `PS2X_ARCH_FLAGS=-march=x86-64-v2 tools/build/configure.sh`.
 
-`recomp.sh` writes the recompiled game to `build/recomp/` and builds
-`build/runtime/ps2xRuntime/ps2EntryRunner`. Rerun it after changing `config/` or the runtime; run
-`vu1lift.py` or `ioplift.py` again (then `ninja -C build/runtime`) after changing a lifter. Without
+`recomp.sh` writes the recompiled game to `build/recomp/` and builds `build/game/gitaroo-man`. Rerun
+it after changing `config/`; run `vu1lift.py` or `ioplift.py` again (then `ninja -C build/game`) after
+changing a lifter. `ninja -C build/game ps2EntryRunner` builds the same game on the runtime's stock
+runner, the emulated reference native code is checked against. Without
 their output the runtime simply interprets the VU1 microprogram and the IOP modules.
 
 ## Running
 
 ```sh
-build/runtime/ps2xRuntime/ps2EntryRunner iso/SLUS_202.94
+build/game/gitaroo-man iso/SLUS_202.94
 ```
 
 Keyboard: arrows = d-pad, WASD = left stick, IJKL = right stick, X/Space = Cross, C = Circle,
