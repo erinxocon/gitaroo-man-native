@@ -109,22 +109,22 @@ original functions on the emulated drivers and is the reference.
 - **Data.** A library open reads the IMC entry table. A stream open (0x1400) reads its header and
   queues its data for a loader thread, which reads it into memory (a section is opened seconds
   before it plays; the synchronous preload, 0x2000, waits for it). A sound loaded whole (0x1500) is
-  read at once, with the loop flags MSTREAM writes over the first and last blocks of each chunk.
-- **Voices.** Each stream channel is a host voice on the voice MSTREAM would have allocated (first
-  free of 24 per bank; streams in one bank, sounds in the other, a section shares its first
-  section's voices). It decodes PS-ADPCM, follows the data's loop and end flags and steps by the
-  rate's pitch (Catmull-Rom between samples). Volume and pan go through MSTREAM's pan law, and
-  MSTREAM's per-voice volume record is kept, so a voice keeps its stored pan across streams.
-- **Mix.** Voices are summed per bank; streams and movies pass the master volume twice and effects
-  once, because on the PS2 they reach the output through its two sound cores in turn. Reverb is not
-  mixed: its volume stays 0 in this game.
-- **Section changes.** MSTREAM switches a playing stream to the queued section (0x5800) at an
-  exact block: the voices do the same, from the queued stream's first block, at that block.
-- **Status.** The status word (0x0900, polled every frame) changes on MSTREAM's refill schedule:
-  a round each time the lead voice reaches a chunk boundary of the current stream, which switches
-  to the queued section once the next upload would cross the change (1-2 chunks, up to ~0.9 s,
-  before it is heard) and ends the stream after its last chunk round. The engine keeps that
-  schedule and its counters, since the game reacts to the status. It only uses the mixer's timeline.
+  read at once. `game_functions.cpp` turns the game's disc path into a host path, so the engine
+  itself knows nothing about the runtime or guest memory.
+- **Streams and channels.** A stream is a handle (lowest free id) on a group of channels, one
+  decoder per channel: PS-ADPCM, stepped by round(rate * 4096 / 48000) with Catmull-Rom between
+  samples. The sections of a song share the first section's group, so per-channel volume and pan
+  carry across section changes. There is no voice allocator, no SPU RAM ring and no refill rounds.
+  A block's end flag (bit 0) stops the channel, or restarts it for a sound opened looping.
+- **Volume.** (volume, pan) go through the game's stereo pan law: pan 0x3FFF is centre, and away
+  from it the far side fades. Music and effects share one master gain.
+- **Section changes.** The game queues the next section with 0x5800 (stream, position); all
+  channels switch to its first block at exactly that block. 0x5C00, 0x5700 and a clock-resetting
+  play cancel it.
+- **Status.** 0x0900 means "still playing", which is all the game uses it for: it changes when a
+  section change is heard and when a stream's data ends. Sections are chosen from the song clock,
+  so MSTREAM's earlier flip on its refill schedule (up to ~0.9 s before the change is heard) is
+  deliberately not reproduced.
 - **Song clock.** At each of the game's vblanks (its handler at 0x1C8AD0 is wrapped), the clock
   voice's position since key-on, minus the audio still buffered ahead of the speaker, in whole
   28-sample blocks, never decreasing; 0x5600 returns the last vblank's value, as MSTREAM's handler did.
@@ -133,9 +133,11 @@ original functions on the emulated drivers and is the reference.
   0x23EFF0..0x23F660) still collects PCM on the EE; its send function now moves whole 0x400-byte
   blocks to a FIFO the mixer plays, with the same back-pressure as the PS2's ring. libsdr
   (`sceSdRemote`) is only used by those functions and is a no-op.
+  Their gain is the square of the player's volume setting (0x2649BC), the level the PS2's output
+  path gives them.
 - **Output.** The sound card's callback pulls the mix (`audio_device.cpp`, about 15 ms device
   buffer), so a stalled game frame does not stall the music. `GITAROO_AUDIO_DUMP=<file.wav>` records
-  it; `GITAROO_TRACE_SOUND=1` prints opens, plays, section and status changes.
+  it; `GITAROO_TRACE_SOUND=1` prints opens, plays and section changes.
 
 Not handled (never used by the game): MSTREAM's opens by file path or from EE memory (0x1000,
 0x1100, 0x1300) reply failure with a warning.
@@ -153,10 +155,10 @@ Results (2026-11-08, `stage1_battle.txt` from boot, 900 s):
 | | |
 |---|---|
 | requests and arguments | all 1493 in order, except which of two sections the battle chose (it varies between runs of one build) |
-| replies | identical except words holding the song clock |
-| status changes | the same 27 in order (apart from that section); song clock within about 1000 samples, the 720-frame device offset plus a frame's sampling |
-| output | -60 to -69 dB residual once aligned (title, menus, effects, battle music), about -20 dB where the game moved a volume at another moment; no discontinuities the reference lacks |
-| movies (boot, 300 s) | about -68 dB residual, no discontinuities. The two runs differ by whole laps of the 128 ms ring every ~12 s, one lap per step |
+| replies | identical in the words the game reads (open results, library and preload results), which is all `mstream_diff.py` compares; the driver's other reply words were stale |
+| status changes | the same 27 in order (apart from that section). A section's status now flips when the change is heard, up to about 0.9 s after MSTREAM's refill schedule flipped it (song clock 900956 against 859852 for the first change) |
+| output | with a 4 s lag search and 10 s windows, mean residual -32 dB across audible windows, the same as the previous engine against the reference; windows where the game moved a volume at another moment dominate it. Against the previous engine, -45 dB mean |
+| movies (boot, 300 s) | the same segments at the same levels as the reference, mean residual -35 dB (the two runs differ by whole laps of the ring) |
 
 The residual is not exact because the mix is floating point with one final rounding, where the
 SPU2 model rounds at each stage.

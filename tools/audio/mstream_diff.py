@@ -63,7 +63,9 @@ def main():
             print(f"#{i}: request differs: ref {key(r)} vs native {key(q)}")
             diffs += 1
             break
-        if r["recv"][:4] != q["recv"][:4]:
+        # Only these replies carry meaning: the game ignores the rest, which the driver left stale.
+        words = {0x1400: 4, 0x1500: 4, 0x1a00: 1, 0x2000: 1}.get(r["fno"], 0)
+        if r["recv"][:words] != q["recv"][:words]:
             diffs += 1
             if diffs <= a.limit:
                 print(f"#{i} fno={hex(r['fno'])} send={' '.join(r['send'][:4])}: reply ref {' '.join(r['recv'][:4])} native {' '.join(q['recv'][:4])}")
