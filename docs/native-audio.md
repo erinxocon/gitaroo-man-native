@@ -1,0 +1,200 @@
+# Native audio
+
+The port's sound is native: host code serves the game's sound requests directly, instead of the
+IOP emulator running SDRDRV, MSTREAM and LIBSD over the SPU2 model. This page records what the game
+asks for, in what format the data is, and how the native engine works. The emulated stack stays as
+the reference to check against (`ps2EntryRunner`).
+
+## Tools
+
+- `PS2X_TRACE_MSTREAM=1`: every RPC to MSTREAM (SID 0x1563) with caller, sizes, the first 8 send
+  and reply words, the vsync tick and host time. `PS2X_TRACE_RPC=1`: every SIF RPC.
+  `PS2X_TRACE_IOP_IMPORTS=1`: every import an IOP module calls (LIBSD's included).
+- `tools/ioplift/irx_ghidra.sh`: relocates LIBSD, SDRDRV and MSTREAM to their load addresses
+  (`irx_symbols.py`, names for imports, LIBSD exports and pointer-reached code), imports them into
+  the Ghidra project `build/ghidra/IopSound` and writes pseudo-C to `build/irx/<NAME>.c`.
+  Derived from the game: never commit the outputs.
+
+## What the game uses
+
+Two IOP services, both reached through SIF RPC:
+
+- **SDRDRV** (SID 0x80000701, Sony's remote LIBSD for the EE's libsdr; fno & 0xFFF0 picks the
+  LIBSD call): `sceSdInit` (0x8000) and `sceSdSetParam` (0x8010, master volumes) at start-up, and
+  the movie sound: `sceSdBlockTrans` (0x80E0) with core 0, mode 0x13 (write, loop), IOP address
+  0x8AB40, 0x6000 bytes starts SPU2 AutoDMA from a PCM ring the EE fills over SIF DMA (mode 2
+  stops it), and the movie player polls `sceSdBlockTransStatus` (0x8100) for the position --
+  822k polls in a 5-minute run with movies.
+- **MSTREAM** (SID 0x1563, iNiS's "MultiStream_driver"): everything else -- music, sound effects
+  and the song clock. The command is `fno & 0xFFFFFF00`; arguments are words of the send buffer;
+  the reply is 16 bytes at 0x54E94: result, then for opens the stream header's channel count and
+  sample rate and the stream id.
+
+MSTREAM commands seen (stage 1 from boot, scripted input; counts in "Census" below):
+
+| fno | handler | meaning (from the IRX and the traces) |
+|---|---|---|
+| 0x0100 | init | create the driver's threads and state |
+| 0x0E00 | sleep | stop and free everything |
+| 0x3100 / 0x3200 | | start / stop the playback threads and the vblank clock handler |
+| 0x1A00 | 0x4B138 | open a library (`cdrom0:\PROJECTS\STDATA\US\...\X.IMC`): read its entry table |
+| 0x1B00 | 0x4B2A0 | close the library |
+| 0x1400 | 0x4B4A8 | open a stream by entry name (song sections `INT`, `A1`, `B1aT`...): header, SPU buffers, voices |
+| 0x1500 | 0x4C064 | open a "local" sound by entry name (effects `SELECT`, `OK`...: loaded whole) |
+| 0x1F00 | 0x4C90C | close a stream |
+| 0x2000 / 0x2100 / 0x2200 | 0x4C7C4 / 0x4ED94 / | preload a stream; 0x2200 polls for the preload to end |
+| 0x0800 | 0x4D4AC | play: sets the SPU IRQ address for refills, keys the voices on, optionally resets the song clock |
+| 0x0900 | | stream status (polled every frame) |
+| 0x0A00 | 0x4D694 | stop a stream |
+| 0x0D00 | 0x4CA24 | stop all |
+| 0x5100 / 0x5200 | 0x4E8A0 / 0x4E90C | set channel volume / pan (stream, channel, 0..0x7FFF; pan 0x3FFF centre) |
+| 0x5600 | | read the song clock (polled every frame) |
+| 0x5700 | 0x4D830 | choose the stream whose voice drives the song clock, reset it |
+| 0x5800 | 0x4DC38 | queue (stream, sample position, flag): the event thread starts that stream when the playing one gets there (seamless section changes) |
+| 0x5C00 | 0x4DC24 | clear the event queue |
+| 0xF100 | | print free memory |
+
+## How MSTREAM plays
+
+- A stream is a sequence of interleaved PS-ADPCM channels (1-8) read from an IMC library on disc.
+  Each channel plays on its own SPU2 voice (pitch 0x1000 for 48 kHz, 0x0EB3 for 44.1 kHz) from a
+  ring of 2 or 3 buffers in SPU RAM. MSTREAM reads chunks from the CD into IOP RAM, uploads them
+  with `sceSdVoiceTrans`, and refills on the SPU IRQ (the IRQ address follows the voice).
+- Volume and pan per channel are set per frame by the game (0x5100/0x5200 with stream and
+  channel; the channel picks a voice from the stream's voice table). MSTREAM turns (volume, pan)
+  into the voice's left/right volume (0x4E6D8): stereo, volume/2 on the near side and the far side
+  reduced by how far the pan is from 0x3FFF; mono (0x5B00 0), a centre-weighted attenuation.
+- Song clock: a vblank handler reads the clock stream's voice address (`sceSdGetAddr`, NAX) and
+  turns the distance into samples played (0x4D830, 28 samples per 16-byte block). The game reads
+  it with fno 0x5600 every frame. So on the PS2 too the clock moves in vblank steps.
+- Section changes: the game queues the next section with 0x5800; a thread waits until the playing
+  stream is near its end and starts the queued one.
+
+## IMC files
+
+`PROJECTS/STDATA/US/*/SONGDATA/STnn.IMC` (one per stage, 18-271 MB), `SOUND/*.IMC` (menus),
+`TITLE/TITLE.IMC`:
+
+- u32 entry count, then 32-byte entries: name (up to 8 characters, NUL-terminated by byte 8 at
+  the latest; MSTREAM upper-cases the first 8 bytes), words, the stream's byte offset (+0x10), a
+  word, an unused word (MSTREAM keeps the file handle there), and a kind (+0x1C): 0 for streams,
+  2 for sounds loaded whole (effects, jingles).
+- At each stream's offset, a 16-byte header: channels (1-8), sample rate (48000, 44100, 22050;
+  a rate MSTREAM has no pitch for, such as ST10's 22000, plays silent), the interleave in 16-byte
+  ADPCM blocks (MSTREAM's SPU buffer size; below 0x300 it uses 3 IOP buffers, else 2) and the
+  length in interleave chunks, all channels together. Then the channels' PS-ADPCM data in turn,
+  one chunk of `interleave` blocks (0x3000 bytes for the music) per channel (16-byte blocks:
+  shift/filter, flags, 14 bytes of nibbles), the first block of each channel silent. Every sound
+  ends with an end flag (1) followed by a self-looping silent block (7).
+- Stage songs are cut into sections (ST01: `INTs INT A1 B1aT B1aL ... C1a-d ENDs ENDa-d`, 8-46 s),
+  all 8 channels at 48 kHz, interleave 0x300; jingles and voices (`Lose Win Result Pause Select OK
+  Cancel P1atms ... Win_P1-6`) are 1-2 channels. In ST01's A1, channels 0-1 are a stereo pair
+  (the backing, -12 dBFS), 2 and 4 carry the same mono part, as do 3 and 5, and 6-7 are a second
+  stereo pair (`tools/audio/imc.py wav` decodes them). The battle pans 0 left, 1 right, 2-5
+  centre and starts 4 and 5 silent, so the duplicated parts are faded between per player action;
+  which is which is still to be listened to.
+
+## Native engine
+
+Sound is native in the port (`build/game/gitaroo-man`, code in `src/port/sound/`). The game's own
+sound functions are defined natively: the port's build leaves their recompiled versions out
+(`GITAROO_NATIVE_FUNCTIONS` in `CMakeLists.txt`), so direct calls, tail jumps and the function table
+all reach the native ones. Nothing goes to the IOP: the drivers are not loaded, there is no RPC, and
+the emulated SPU2's output is disconnected. `ps2EntryRunner` (built from the same tree) runs the
+original functions on the emulated drivers and is the reference.
+
+- **Requests.** `FUN_0023E690(request, buffers, nowait)` is the game's one function for talking to
+  MSTREAM, with fixed send and reply buffers; `port::sound::request` answers it. The bind in
+  `FUN_0023E600` needs only the client's server pointer set.
+- **Data.** A library open reads the IMC entry table. A stream open (0x1400) reads its header and
+  queues its data for a loader thread, which reads it into memory (a section is opened seconds
+  before it plays; the synchronous preload, 0x2000, waits for it). A sound loaded whole (0x1500) is
+  read at once, with the loop flags MSTREAM writes over the first and last blocks of each chunk.
+- **Voices.** Each stream channel is a host voice on the voice MSTREAM would have allocated (first
+  free of 24 per bank; streams in one bank, sounds in the other, a section shares its first
+  section's voices). It decodes PS-ADPCM, follows the data's loop and end flags and steps by the
+  rate's pitch (Catmull-Rom between samples). Volume and pan go through MSTREAM's pan law, and
+  MSTREAM's per-voice volume record is kept, so a voice keeps its stored pan across streams.
+- **Mix.** Voices are summed per bank; streams and movies pass the master volume twice and effects
+  once, because on the PS2 they reach the output through its two sound cores in turn. Reverb is not
+  mixed: its volume stays 0 in this game.
+- **Section changes.** MSTREAM switches a playing stream to the queued section (0x5800) at an
+  exact block: the voices do the same, from the queued stream's first block, at that block.
+- **Status.** The status word (0x0900, polled every frame) changes on MSTREAM's refill schedule:
+  a round each time the lead voice reaches a chunk boundary of the current stream, which switches
+  to the queued section once the next upload would cross the change (1-2 chunks, up to ~0.9 s,
+  before it is heard) and ends the stream after its last chunk round. The engine keeps that
+  schedule and its counters, since the game reacts to the status. It only uses the mixer's timeline.
+- **Song clock.** At each of the game's vblanks (its handler at 0x1C8AD0 is wrapped), the clock
+  voice's position since key-on, minus the audio still buffered ahead of the speaker, in whole
+  28-sample blocks, never decreasing; 0x5600 returns the last vblank's value, as MSTREAM's handler did.
+  `GITAROO_SONG_CLOCK_OFFSET_MS` overrides how far it trails the mix.
+- **Movies.** The movie player's audio decoder (Sony's ezmpeg sample, six functions at
+  0x23EFF0..0x23F660) still collects PCM on the EE; its send function now moves whole 0x400-byte
+  blocks to a FIFO the mixer plays, with the same back-pressure as the PS2's ring. libsdr
+  (`sceSdRemote`) is only used by those functions and is a no-op.
+- **Output.** The sound card's callback pulls the mix (`audio_device.cpp`, about 15 ms device
+  buffer), so a stalled game frame does not stall the music. `GITAROO_AUDIO_DUMP=<file.wav>` records
+  it; `GITAROO_TRACE_SOUND=1` prints opens, plays, section and status changes.
+
+Not handled (never used by the game): MSTREAM's opens by file path or from EE memory (0x1000,
+0x1100, 0x1300) reply failure with a warning.
+
+### Checking it
+
+Run the same script on the port and on `ps2EntryRunner` (`PS2X_TRACE_MSTREAM=1` on both, which print
+the same lines; `GITAROO_AUDIO_DUMP` on the port, `PS2X_AUDIO_DUMP` on the reference).
+`tools/audio/mstream_diff.py <reference.log> <port.log>` compares requests, replies and status
+changes; `tools/audio/wav_compare.py` compares the recordings window by window. Search a wide lag:
+the runs drift apart by seconds.
+
+Results (2026-11-08, `stage1_battle.txt` from boot, 900 s):
+
+| | |
+|---|---|
+| requests and arguments | all 1493 in order, except which of two sections the battle chose (it varies between runs of one build) |
+| replies | identical except words holding the song clock |
+| status changes | the same 27 in order (apart from that section); song clock within about 1000 samples, the 720-frame device offset plus a frame's sampling |
+| output | -60 to -69 dB residual once aligned (title, menus, effects, battle music), about -20 dB where the game moved a volume at another moment; no discontinuities the reference lacks |
+| movies (boot, 300 s) | about -68 dB residual, no discontinuities. The two runs differ by whole laps of the 128 ms ring every ~12 s, one lap per step |
+
+The residual is not exact because the mix is floating point with one final rounding, where the
+SPU2 model rounds at each stage.
+
+### Open
+
+- Listening: which duplicated part is which, and whether the song clock (trailing the mix by the
+  device buffer) feels as the PS2 does.
+- Paths the scripted runs do not reach: winning, the versus mode, stages 2-10 (same commands per
+  the census).
+
+## Census
+
+MSTREAM commands per run (stage runs start from the save, play out with no input, and lose):
+
+| fno | stage 1 from boot | stage 3 | stage 5 | stage 10 | boot with movies |
+|---|---|---|---|---|---|
+| 0x5600 clock | 11562 | 6452 | 6631 | 5566 | |
+| 0x0900 status | 11046 | 4503 | 4704 | 3619 | |
+| 0x5100 volume | 908 | 833 | 977 | 843 | 616 |
+| 0x5200 pan | 299 | 225 | 369 | 234 | 8 |
+| 0x0A00 stop | 87 | 82 | 118 | 84 | 4 |
+| 0x2200 preload poll | 68 | 35 | 35 | 35 | |
+| 0x0800 play | 33 | 38 | 29 | 33 | 2 |
+| 0x1400 open stream | 21 | 29 | 47 | 30 | |
+| 0x1500 open local | 19 | 34 | 34 | 34 | 4 |
+| 0x1F00 close | 17 | 31 | 31 | 31 | 4 |
+| 0x1A00 / 0x1B00 library | 4 / 3 | 8 / 7 | 8 / 7 | 8 / 7 | 2 / 2 |
+| 0x0100 / 0x0E00 init / sleep | 4 / 3 | 8 / 7 | 8 / 7 | 8 / 7 | 2 / 2 |
+| 0x0D00 stop all | 3 | 7 | 7 | 7 | 2 |
+| 0x5700 clock stream | 4 | 6 | 6 | 6 | |
+| 0x2000 / 0x2100 preload | 4 / 2 | 6 / 1 | 6 / 1 | 6 / 1 | |
+| 0x5800 queue / 0x5C00 clear | 4 / 3 | 2 / 1 | 2 / 1 | 2 / 1 | |
+| 0x3100 / 0x3200 threads | 2 / 3 | 1 / 2 | 1 / 2 | 1 / 2 | 2 (0x3200) |
+| 0xF100 memory print | 2 | 1 | 1 | 1 | |
+
+Never seen: 0x1000, 0x1100, 0x1300 (other open variants), 0x5300, 0x5A00, 0x5B00 (so the stereo
+pan law is the one in use). LIBSD calls MSTREAM makes: `sceSdSetParam` (all voice and master
+parameters), `sceSdVoiceTrans` (uploads), `sceSdSetSwitch` (key on/off), `sceSdSetAddr`/
+`sceSdGetAddr` (start, loop, IRQ addresses; NAX for the clock), `sceSdSetCoreAttr`/`GetCoreAttr`,
+`sceSdInit`, `sceSdSetTransIntrHandler`, `sceSdSetSpu2IntrHandler`.
