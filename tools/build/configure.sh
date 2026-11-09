@@ -1,8 +1,9 @@
 #!/bin/bash
 # Configures and builds the two CMake trees from external/PS2Recomp:
 #   build/tools    the recompiler (ps2_recomp) and analyzer
-#   build/runtime  the runtime + ps2EntryRunner, compiled together with build/recomp (the recompiled
-#                  game, produced by tools/build/recomp.sh) and src/ (our game-specific code)
+#   build/game     the port's executable (top-level CMakeLists.txt): build/recomp (the recompiled
+#                  game, produced by tools/build/recomp.sh), src/ (our code) and the runtime as a
+#                  library. `ninja -C build/game ps2EntryRunner` builds the emulated reference.
 # Extra arguments are passed to both cmake configure calls (e.g. -DPS2X_PROFILE_DEBUGINFO=ON).
 # PS2Recomp needs SSE4.1 on x86. The default builds for this machine (-march=native); for binaries
 # that run on other x86-64 CPUs use PS2X_ARCH_FLAGS=-march=x86-64-v2.
@@ -21,7 +22,4 @@ cmake -S "$SRC" -B "$ROOT/build/tools" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF "$@"
 cmake --build "$ROOT/build/tools"
 mkdir -p "$ROOT/build/recomp"
-cmake -S "$SRC" -B "$ROOT/build/runtime" -G Ninja -DCMAKE_BUILD_TYPE=Release \
-    -DPS2X_BUILD_RUNTIME=ON -DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_ANALYZER=OFF \
-    -DPS2X_BUILD_TEST=OFF -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_AGRESSIVE_LOGS=OFF \
-    -DPS2X_GAME_SOURCE_DIR="$ROOT/src" -DPS2X_GENERATED_DIR="$ROOT/build/recomp" "$@"
+cmake -S "$ROOT" -B "$ROOT/build/game" -G Ninja -DCMAKE_BUILD_TYPE=Release "$@"

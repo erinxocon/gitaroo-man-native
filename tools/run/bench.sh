@@ -10,7 +10,7 @@ tools/run/run.sh "$NAME" 140 PS2X_SKIP_MOVIES=1 PS2X_DUMP_EVERY=100000 PS2X_TRAC
     PS2X_INPUT_SCRIPT="$(cat tools/run/inputs/singleplay.txt)" &
 if [ "$PERF" = perf ]; then
     sleep 100
-    sudo perf record -F 499 -p "$(pgrep -x ps2EntryRunner)" -o "build/$NAME.perf" -- sleep 20 >/dev/null 2>&1
+    sudo perf record -F 499 -p "$(pgrep -x gitaroo-man)" -o "build/$NAME.perf" -- sleep 20 >/dev/null 2>&1
 fi
 wait
 grep "trace:ee\]" "logs/$NAME.log" | paste - - | awk '{

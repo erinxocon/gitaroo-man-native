@@ -11,7 +11,7 @@ mkdir -p logs
 # running unprivileged needs kernel.perf_event_paranoid <= 1.
 [ "$(cat /proc/sys/kernel/perf_event_paranoid)" -le 1 ] || sudo sysctl -qw kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
 PS2X_TRACE_GS=1 perf record -q -F 199 -o "build/$NAME.perf" -- \
-    build/runtime/ps2xRuntime/ps2EntryRunner iso/SLUS_202.94 > "logs/$NAME.log" 2>&1
+    build/game/gitaroo-man iso/SLUS_202.94 > "logs/$NAME.log" 2>&1
 grep "trace:ee\]" "logs/$NAME.log" | paste - - | awk '{
     for (i = 1; i <= NF; i++) { if ($i ~ /^vsync=/) v = substr($i, 7); if ($i ~ /^finish=/) f = substr($i, 8) }
     if (pv != "" && v > pv) printf "%s:%.1f ", v, (f - pf) / (v - pv) * 60; pv = v; pf = f } END { print "" }'
